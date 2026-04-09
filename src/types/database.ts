@@ -49,3 +49,43 @@ export function parseSopRecord(row: SopRecordRow): SopRecord {
     embedding: row.embedding ? JSON.parse(row.embedding) : null,
   };
 }
+
+// Sales performance types
+export type SalesRecord = {
+  id: number;
+  name: string;
+  department: string;
+  month: string;
+  wechat_added: number;
+  interaction: number;
+  demand: number;
+  deal: number;
+};
+
+// Column metadata — single source of truth for display names and roles
+// When adding new data sources, extend or replace this map.
+export const SALES_COLUMN_META = {
+  name:          { label: '姓名',   role: 'dimension' as const },
+  department:    { label: '部门',   role: 'dimension' as const },
+  month:         { label: '月份',   role: 'dimension' as const },
+  wechat_added:  { label: '加微数', role: 'metric' as const },
+  interaction:   { label: '互动数', role: 'metric' as const },
+  demand:        { label: '需求数', role: 'metric' as const },
+  deal:          { label: '成交数', role: 'metric' as const },
+} as const;
+
+export type SalesColumnKey = keyof typeof SALES_COLUMN_META;
+export type MetricColumnKey = {
+  [K in SalesColumnKey]: typeof SALES_COLUMN_META[K]['role'] extends 'metric' ? K : never
+}[SalesColumnKey];
+
+// Generic helper: get display label for any column key, fallback to key itself
+export function getColumnLabel(key: string): string {
+  const meta = SALES_COLUMN_META[key as SalesColumnKey];
+  return meta ? meta.label : key;
+}
+
+// All metric column keys derived from meta
+export const METRIC_KEYS = (Object.entries(SALES_COLUMN_META)
+  .filter(([, m]) => m.role === 'metric')
+  .map(([k]) => k)) as MetricColumnKey[];

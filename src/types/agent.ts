@@ -54,17 +54,17 @@ export type AnalysisOutput = z.infer<typeof analysisOutputSchema>;
 export const AGENT_REGISTRY: Record<string, AgentDefinition> = {
   query: {
     name: 'Query Agent',
-    systemPrompt: 'You are a data query specialist. Your job is to retrieve relevant SOP data based on user queries. Return structured results.',
+    systemPrompt: 'You are a data query specialist. Your job is to retrieve relevant sales performance data based on user queries. Return structured results.',
     tools: ['sql_query', 'vector_search'],
-    keywords: ['查找', '找到', '搜索', '有没有', '展示', '列出', '查询', '哪些', '什么'],
-    description: '从SOP数据中检索信息',
+    keywords: ['查找', '找到', '搜索', '有没有', '展示', '列出', '查询', '哪些', '什么', '业绩', '数据', '成交', '加微', '互动', '需求', '部门', '校区', '排行', '销售', '月'],
+    description: '从销售业绩数据中检索信息',
   },
   analysis: {
     name: 'Analysis Agent',
-    systemPrompt: 'You are a data analyst. Your job is to analyze SOP data, find trends, patterns, and provide actionable insights.',
+    systemPrompt: 'You are a sales performance data analyst. Your job is to analyze sales data, find trends, patterns, and provide actionable insights.',
     tools: ['sql_query', 'statistics'],
-    keywords: ['分析', '对比', '趋势', '原因', '差异', '变化', '为什么', '统计', '排名'],
-    description: '对数据进行统计分析和洞察提取',
+    keywords: ['分析', '对比', '趋势', '原因', '差异', '变化', '为什么', '统计', '排名', '排行', '排行榜', '转化率', '汇总', '总', '平均', '最高', '最低', '最好', '最差', '成交情况', '部门成交', '业绩分析', '加微情况', '各月', '各部门', '对比分析', '环比', '同比', 'top', '前10', 'top10'],
+    description: '对销售业绩数据进行统计分析和洞察提取',
   },
   generator: {
     name: 'Generator Agent',

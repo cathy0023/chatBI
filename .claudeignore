@@ -1,0 +1,28 @@
+# Build cache
+.next/
+out/
+build/
+
+# Dependencies
+node_modules/
+
+# Database files (binary)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Data files
+data/
+
+# Lock files
+package-lock.json
+
+# Test output
+test-results/
+coverage/
+
+# Misc
+*.log
+*.pem
+.DS_Store

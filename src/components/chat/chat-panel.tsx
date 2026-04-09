@@ -1,17 +1,26 @@
 'use client';
 
+import { useState } from 'react';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { MessageList } from './message-list';
 import { ChatInput } from './chat-input';
-import { useChat } from '@/lib/chat/use-chat';
+import type { ChatMessage } from '@/lib/chat/use-chat';
 
-export function ChatPanel() {
-  const { messages, isLoading, error, sendMessage, clearMessages } = useChat();
+type ChatPanelProps = {
+  messages: ChatMessage[];
+  isLoading: boolean;
+  error: string | null;
+  sendMessage: (content: string) => void;
+  clearMessages: () => void;
+};
+
+export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages }: ChatPanelProps) {
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col min-h-0">
       {/* Chat Panel Header */}
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
@@ -41,7 +50,16 @@ export function ChatPanel() {
       )}
 
       {/* Messages */}
-      <MessageList messages={messages} isLoading={isLoading} />
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        selectedMessageId={selectedMessageId}
+        onSelectMessage={(msg) => {
+          if (msg.uiSchema) {
+            setSelectedMessageId(msg.id === selectedMessageId ? null : msg.id);
+          }
+        }}
+      />
 
       {/* Input */}
       <ChatInput onSend={sendMessage} disabled={isLoading} />

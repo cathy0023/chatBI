@@ -9,26 +9,35 @@ import type { ChatMessage } from '@/lib/chat/use-chat';
 type MessageListProps = {
   messages: ChatMessage[];
   isLoading: boolean;
+  selectedMessageId?: string | null;
+  onSelectMessage?: (message: ChatMessage) => void;
 };
 
-export function MessageList({ messages, isLoading }: MessageListProps) {
+export function MessageList({ messages, isLoading, selectedMessageId, onSelectMessage }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, isLoading]);
 
   return (
-    <ScrollArea className="flex-1 px-4">
-      <div className="flex flex-col gap-4 py-4">
-        {messages.length === 0 && (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm py-12">
+    <ScrollArea className="flex-1 min-h-0 px-4">
+      <div className="flex flex-col gap-2 py-2">
+        {messages.length === 0 && !isLoading && (
+          <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm py-4">
             <p>开始对话，提出您的数据分析问题</p>
           </div>
         )}
-        {messages.map(msg => (
-          <MessageItem key={msg.id} message={msg} />
-        ))}
+        {messages
+          .filter(msg => !(msg.role === 'assistant' && msg.content === '' && isLoading))
+          .map(msg => (
+            <MessageItem
+              key={msg.id}
+              message={msg}
+              isSelected={msg.id === selectedMessageId}
+              onClick={onSelectMessage}
+            />
+          ))}
         {isLoading && (
           <div className="flex gap-3">
             <Skeleton className="h-8 w-8 rounded-full" />

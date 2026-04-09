@@ -7,6 +7,28 @@ export type SearchResult = {
   confidence: number;
 };
 
+/**
+ * Split Chinese text into overlapping 2-character segments for search.
+ * Chinese doesn't use spaces to separate words, so we use a sliding window.
+ * E.g. "查找价格异议" → ["查找", "价格", "异议"]
+ */
+function extractChineseSegments(text: string): string[] {
+  // Check if text contains Chinese characters
+  const hasChinese = /[\u4e00-\u9fff]/.test(text);
+  if (!hasChinese) return [];
+
+  const segments: string[] = [];
+  // Extract 2-character overlapping segments from Chinese portions
+  const chineseChars = [...text].filter(c => /[\u4e00-\u9fff]/.test(c));
+  for (let i = 0; i < chineseChars.length - 1; i++) {
+    const pair = chineseChars[i] + chineseChars[i + 1];
+    if (!segments.includes(pair)) {
+      segments.push(pair);
+    }
+  }
+  return segments;
+}
+
 export function keywordSearch(query: string, category?: SopCategory, limit: number = 20): SearchResult {
   const records = searchSopRecords(query, category, limit);
   const totalCount = countSopRecords(category);
@@ -18,24 +40,33 @@ export function keywordSearch(query: string, category?: SopCategory, limit: numb
 }
 
 export function hybridSearch(query: string, category?: SopCategory, limit: number = 20): SearchResult {
-  // MVP: Simple keyword-based search with tag matching
+  // MVP: Simple keyword-based search with Chinese-aware segmentation
   // Phase 3 will add vector semantic search
 
-  const records = searchSopRecords(query, category, limit);
-
-  // Also search by individual words for better coverage
-  const words = query.split(/[\s,，、]+/).filter(w => w.length > 1);
   const allRecords = new Map<string, SopRecord>();
 
-  // Add direct query results
-  for (const r of records) {
+  // Step 1: Search with full query
+  const fullResults = searchSopRecords(query, category, limit);
+  for (const r of fullResults) {
     allRecords.set(r.id, r);
   }
 
-  // Add per-word results
+  // Step 2: Split by whitespace/punctuation (works for mixed-language queries)
+  const words = query.split(/[\s,，、；;！!？?]+/).filter(w => w.length > 1);
   for (const word of words) {
     const wordResults = searchSopRecords(word, category, limit);
     for (const r of wordResults) {
+      if (!allRecords.has(r.id)) {
+        allRecords.set(r.id, r);
+      }
+    }
+  }
+
+  // Step 3: Chinese 2-character segment search (sliding window)
+  const segments = extractChineseSegments(query);
+  for (const segment of segments) {
+    const segResults = searchSopRecords(segment, category, limit);
+    for (const r of segResults) {
       if (!allRecords.has(r.id)) {
         allRecords.set(r.id, r);
       }

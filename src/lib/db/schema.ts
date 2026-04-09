@@ -19,6 +19,21 @@ export function initSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_sop_category ON sop_records(category);
     CREATE INDEX IF NOT EXISTS idx_sop_tags ON sop_records(tags);
 
+    CREATE TABLE IF NOT EXISTS sales_performance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      department TEXT NOT NULL,
+      month TEXT NOT NULL,
+      wechat_added INTEGER DEFAULT 0,
+      interaction INTEGER DEFAULT 0,
+      demand INTEGER DEFAULT 0,
+      deal INTEGER DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sales_name ON sales_performance(name);
+    CREATE INDEX IF NOT EXISTS idx_sales_department ON sales_performance(department);
+    CREATE INDEX IF NOT EXISTS idx_sales_month ON sales_performance(month);
+
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
       title TEXT,

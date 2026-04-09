@@ -75,3 +75,26 @@ export function getMessagesBySession(sessionId: string): ChatMessage[] {
   const db = getDb();
   return db.prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC').all(sessionId) as ChatMessage[];
 }
+
+export function getAllSessions(): Array<ChatSession & { message_count: number }> {
+  const db = getDb();
+  return db.prepare(`
+    SELECT s.*, COUNT(m.id) as message_count
+    FROM chat_sessions s
+    LEFT JOIN chat_messages m ON s.id = m.session_id
+    GROUP BY s.id
+    ORDER BY s.created_at DESC
+    LIMIT 50
+  `).all() as Array<ChatSession & { message_count: number }>;
+}
+
+export function deleteSession(id: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM chat_messages WHERE session_id = ?').run(id);
+  db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(id);
+}
+
+export function updateSessionTitle(id: string, title: string): void {
+  const db = getDb();
+  db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ?').run(title, id);
+}
