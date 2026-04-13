@@ -13,34 +13,51 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
-  // Get the selected message's uiSchema, or fall back to latest assistant uiSchema
-  const activeSchema = (() => {
-    if (selectedMessageId) {
-      const selected = chat.messages.find(m => m.id === selectedMessageId);
-      if (selected?.uiSchema) return selected.uiSchema;
-    }
-    // Default: show latest assistant message's uiSchema
-    return chat.messages.reduce<unknown>((acc, msg) => {
-      if (msg.role === 'assistant' && msg.uiSchema) return msg.uiSchema;
-      return acc;
-    }, null);
+  // Get the selected message's data, or fall back to latest assistant data
+  const { activeSchema, activeVisualization } = (() => {
+    const findMessageData = (msgId: string | null) => {
+      if (msgId) {
+        const selected = chat.messages.find(m => m.id === msgId);
+        if (selected) {
+          return {
+            schema: selected.uiSchema ?? null,
+            vis: selected.visualization,
+          };
+        }
+      }
+      // Default: show latest assistant message's data
+      const last = [...chat.messages].reverse().find(
+        m => m.role === 'assistant' && (m.uiSchema || m.visualization)
+      );
+      if (last) {
+        return {
+          schema: last.uiSchema ?? null,
+          vis: last.visualization,
+        };
+      }
+      return { schema: null, vis: undefined };
+    };
+    return {
+      activeSchema: findMessageData(selectedMessageId).schema,
+      activeVisualization: findMessageData(selectedMessageId).vis,
+    };
   })();
 
   // Update selectedMessageId when new messages arrive
   useEffect(() => {
     if (!selectedMessageId) {
-      const lastAssistantWithSchema = [...chat.messages].reverse().find(
-        m => m.role === 'assistant' && m.uiSchema
+      const lastAssistantWithData = [...chat.messages].reverse().find(
+        m => m.role === 'assistant' && (m.uiSchema || m.visualization)
       );
-      if (lastAssistantWithSchema) {
-        setSelectedMessageId(lastAssistantWithSchema.id);
+      if (lastAssistantWithData) {
+        setSelectedMessageId(lastAssistantWithData.id);
       }
     }
   }, [chat.messages, selectedMessageId]);
 
   // Expose setSelectedMessageId via chat panel callback
   const handleSelectMessage = useCallback((msg: ChatMessage) => {
-    if (msg.uiSchema) {
+    if (msg.uiSchema || msg.visualization) {
       setSelectedMessageId(prev => prev === msg.id ? null : msg.id);
     }
   }, []);
@@ -113,7 +130,11 @@ export default function Home() {
 
           {/* Dynamic Rendering Area - 40% */}
           <div className="hidden md:flex h-full flex-col overflow-hidden">
-            <RenderArea schema={activeSchema as Parameters<typeof RenderArea>[0]['schema']} isLoading={chat.isLoading} />
+            <RenderArea
+              schema={activeSchema as Parameters<typeof RenderArea>[0]['schema']}
+              isLoading={chat.isLoading}
+              visualization={activeVisualization}
+            />
           </div>
         </div>
       </main>

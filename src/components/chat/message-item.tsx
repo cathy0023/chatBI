@@ -14,14 +14,15 @@ type MessageItemProps = {
 
 export function MessageItem({ message, isSelected, onClick }: MessageItemProps) {
   const isUser = message.role === 'user';
+  const hasData = !isUser && (message.uiSchema || message.visualization);
 
   return (
     <div
       data-testid={`message-${message.id}`}
       data-role={message.role}
-      className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'} ${!isUser && message.uiSchema ? 'cursor-pointer hover:bg-muted/50 rounded-lg p-1 -mx-1' : ''}`}
+      className={`flex gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'} ${hasData ? 'cursor-pointer hover:bg-muted/50 rounded-lg p-1 -mx-1' : ''}`}
       onClick={() => {
-        if (!isUser && message.uiSchema && onClick) {
+        if (hasData && onClick) {
           onClick(message);
         }
       }}

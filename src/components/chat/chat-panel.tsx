@@ -55,7 +55,7 @@ export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessag
         isLoading={isLoading}
         selectedMessageId={selectedMessageId}
         onSelectMessage={(msg) => {
-          if (msg.uiSchema) {
+          if (msg.uiSchema || msg.visualization) {
             setSelectedMessageId(msg.id === selectedMessageId ? null : msg.id);
           }
         }}

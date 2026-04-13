@@ -2,11 +2,19 @@
 
 import { useState, useCallback, useRef } from 'react';
 
+export type VisualizationData = {
+  title: string;
+  description: string;
+  code: string;
+  dependencies?: Record<string, string>;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   uiSchema?: unknown;
+  visualization?: VisualizationData;
 };
 
 export function useChat() {
@@ -32,7 +40,7 @@ export function useChat() {
     const assistantId = (Date.now() + 1).toString();
     setMessages(prev => [
       ...prev,
-      { id: assistantId, role: 'assistant', content: '', uiSchema: undefined },
+      { id: assistantId, role: 'assistant', content: '', uiSchema: undefined, visualization: undefined },
     ]);
 
     const abortController = new AbortController();
@@ -56,6 +64,8 @@ export function useChat() {
 
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = '';
+      let currentData = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -65,10 +75,7 @@ export function useChat() {
 
         // Parse SSE events from buffer
         const lines = buffer.split('\n');
-        buffer = '';
-
-        let currentEvent = '';
-        let currentData = '';
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           if (line.startsWith('event: ')) {
@@ -98,6 +105,16 @@ export function useChat() {
                     prev.map(m =>
                       m.id === assistantId
                         ? { ...m, uiSchema: parsed.uiSchema }
+                        : m,
+                    ),
+                  );
+                  break;
+
+                case 'visualization':
+                  setMessages(prev =>
+                    prev.map(m =>
+                      m.id === assistantId
+                        ? { ...m, visualization: parsed as VisualizationData }
                         : m,
                     ),
                   );

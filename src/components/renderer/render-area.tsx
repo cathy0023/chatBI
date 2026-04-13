@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
 import ReactEChartsCore from 'echarts-for-react/lib/core';
 import * as echarts from 'echarts/core';
 import { BarChart, PieChart, LineChart, RadarChart } from 'echarts/charts';
@@ -21,6 +22,29 @@ echarts.use([
   CanvasRenderer,
 ]);
 
+const SandpackRenderer = dynamic(
+  () => import('./sandpack-renderer').then(m => ({ default: m.SandpackRenderer })),
+  { ssr: false, loading: () => <SandpackLoadingSkeleton /> },
+);
+
+type VisualizationData = {
+  title: string;
+  description: string;
+  code: string;
+  dependencies?: Record<string, string>;
+};
+
+function SandpackLoadingSkeleton() {
+  return (
+    <div className="w-full h-[500px] rounded-lg border overflow-hidden flex items-center justify-center bg-muted/30">
+      <div className="flex flex-col items-center gap-2">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+        <p className="text-sm text-muted-foreground">加载可视化沙箱...</p>
+      </div>
+    </div>
+  );
+}
+
 type UISchema = {
   type: string;
   data: Record<string, unknown>;
@@ -32,6 +56,7 @@ type UISchema = {
 type RenderAreaProps = {
   schema: UISchema | null;
   isLoading?: boolean;
+  visualization?: VisualizationData;
 };
 
 function buildEChartsOption(schema: UISchema): Record<string, unknown> | null {
@@ -235,7 +260,22 @@ function renderTable(data: Record<string, unknown>) {
   );
 }
 
-export function RenderArea({ schema, isLoading }: RenderAreaProps) {
+export function RenderArea({ schema, isLoading, visualization }: RenderAreaProps) {
+  // Priority: Sandpack visualization > legacy UISchema
+  if (visualization?.code) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden p-4">
+        <div className="mb-3">
+          <h3 className="text-base font-semibold">{visualization.title}</h3>
+          {visualization.description && (
+            <p className="text-muted-foreground text-sm mt-1">{visualization.description}</p>
+          )}
+        </div>
+        <SandpackRenderer code={visualization.code} dependencies={visualization.dependencies} />
+      </div>
+    );
+  }
+
   if (!schema) {
     if (isLoading) {
       return (
