@@ -39,7 +39,9 @@ describe('validateSQL', () => {
     it('should reject INSERT', () => {
       const result = validateSQL("INSERT INTO sales_performance VALUES (1, 'test')");
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain('SELECT');
+      if (!result.valid) {
+        expect(result.reason).toContain('SELECT');
+      }
     });
 
     it('should reject UPDATE', () => {
@@ -80,13 +82,17 @@ describe('validateSQL', () => {
     it('should reject unknown table names', () => {
       const result = validateSQL('SELECT * FROM users');
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain('table');
+      if (!result.valid) {
+        expect(result.reason).toContain('table');
+      }
     });
 
     it('should reject queries referencing unknown columns', () => {
       const result = validateSQL('SELECT password FROM sales_performance');
       expect(result.valid).toBe(false);
-      expect(result.reason).toContain('column');
+      if (!result.valid) {
+        expect(result.reason).toContain('column');
+      }
     });
   });
 });

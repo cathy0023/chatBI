@@ -39,5 +39,5 @@ export type NL2SQLResult = {
   sql: string;
   records: Record<string, unknown>[];
   confidence: number;
-  source: 'generated' | 'repaired' | 'fallback';
+  source: 'generated' | 'repaired' | 'fallback' | 'fewshot-direct' | 'fewshot-fallback';
 };

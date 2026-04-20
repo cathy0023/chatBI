@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FEW_SHOTS, matchFewShots } from '@/lib/semantic/few-shots';
+import { validateSQL } from '@/lib/semantic/validator';
 
 describe('FEW_SHOTS', () => {
   it('should have at least 5 examples', () => {
@@ -11,6 +12,13 @@ describe('FEW_SHOTS', () => {
       expect(shot.patterns.length).toBeGreaterThan(0);
       expect(shot.question).toBeTruthy();
       expect(shot.sql).toMatch(/^SELECT/i);
+    }
+  });
+
+  it('all few-shot SQL should pass validation', () => {
+    for (const shot of FEW_SHOTS) {
+      const result = validateSQL(shot.sql);
+      expect(result.valid, result.valid ? '' : String((result as { reason?: string }).reason ?? 'unknown error')).toBe(true);
     }
   });
 });
@@ -46,5 +54,34 @@ describe('matchFewShots', () => {
   it('should return at most 3 matches', () => {
     const matches = matchFewShots('对比排名趋势');
     expect(matches.length).toBeLessThanOrEqual(3);
+  });
+
+  it('should match "9月份成交单top5的销售" to month-top5 example', () => {
+    const matches = matchFewShots('9月份成交单top5的销售');
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].sql).toContain("month = '9月'");
+    expect(matches[0].sql).toContain('GROUP BY name');
+    expect(matches[0].sql).toContain('LIMIT 5');
+  });
+
+  it('should match "8月份成交单top3的销售" to month-top5 example', () => {
+    const matches = matchFewShots('8月份成交单top3的销售');
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].sql).toContain('GROUP BY name');
+  });
+
+  it('should NOT match "销售业绩一览" to ranking pattern', () => {
+    const matches = matchFewShots('销售业绩一览');
+    expect(matches[0].question).toBe('销售业绩一览');
+  });
+
+  it('should NOT match "9月份成交单top5的销售" to sales-performance pattern', () => {
+    const matches = matchFewShots('9月份成交单top5的销售');
+    expect(matches[0].question).not.toBe('销售业绩一览');
+  });
+
+  it('should respect maxResults parameter', () => {
+    const matches = matchFewShots('9月份成交单top5的销售', 1);
+    expect(matches.length).toBe(1);
   });
 });

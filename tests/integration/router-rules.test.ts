@@ -34,7 +34,7 @@ describe('Router Rules - Keyword Matching', () => {
       const result = matchByKeywords('分析各部门10月成交情况');
       expect(result).not.toBeNull();
       expect(result!.intent).toBe('analysis');
-      expect(result!.agents).toEqual(['query', 'analysis', 'ui-builder']);
+      expect(result!.agents).toEqual(['query', 'analysis']);
     });
 
     it('should match ranking keywords as analysis', () => {

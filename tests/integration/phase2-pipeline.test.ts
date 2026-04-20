@@ -73,21 +73,61 @@ vi.mock('@/lib/db/connection', () => ({
 let llmCallCount = 0;
 const mockGenerateText = vi.fn().mockImplementation(({ prompt }: { prompt: string }) => {
   llmCallCount++;
-  // If prompt looks like an intent classifier prompt, return routing decision
-  if (prompt.includes('intent classifier') || prompt.includes('Classify the user')) {
+
+  // NL2SQL prompt contains "SQL" or "sales_performance"
+  if (prompt.includes('SQL') || prompt.includes('sales_performance')) {
+    if (prompt.includes('武莹')) {
+      return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE name = '武莹' ORDER BY month" });
+    }
+    if (prompt.includes('花园桥')) {
+      return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE department LIKE '%花园桥%' ORDER BY month" });
+    }
+    if (prompt.includes('排行榜') || prompt.includes('排名')) {
+      return Promise.resolve({ text: 'SELECT * FROM sales_performance ORDER BY deal DESC LIMIT 10' });
+    }
+    // Unknown queries → SQL that returns 0 results
+    if (prompt.includes('xyz') || prompt.includes('不存在')) {
+      return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE name = '__nonexistent__'" });
+    }
+    return Promise.resolve({ text: 'SELECT * FROM sales_performance ORDER BY month, name LIMIT 1000' });
+  }
+
+  // Router prompt contains "意图分类器"
+  if (prompt.includes('意图分类器')) {
     if (prompt.includes('分析') || prompt.includes('对比') || prompt.includes('排行') || prompt.includes('排名')) {
       return Promise.resolve({
-        object: { intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis', 'ui-builder'], params: {} },
+        text: JSON.stringify({ intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis'], params: {} }),
       });
     }
     return Promise.resolve({
-      object: { intent: 'query', confidence: 0.8, agents: ['query'], params: {} },
+      text: JSON.stringify({ intent: 'query', confidence: 0.8, agents: ['query'], params: {} }),
     });
   }
-  // Analysis agent prompt — return analysis JSON
+
+  // Default
   return Promise.resolve({
-    text: JSON.stringify({
-      summary: `共分析 ${12} 条销售数据，整体成交稳步增长`,
+    text: JSON.stringify({ intent: 'query', confidence: 0.7, agents: ['query'], params: {} }),
+  });
+});
+
+const mockGenerateObject = vi.fn().mockImplementation(({ prompt }: { prompt: string }) => {
+  // UnifiedAnalysisResponse — extract user question from prompt to return relevant text
+  const questionMatch = prompt.match(/用户问题:\s*"([^"]+)"/);
+  const question = questionMatch ? questionMatch[1] : '';
+
+  let text = '共分析 12 条销售数据，整体成交稳步增长';
+  if (question.includes('武莹')) {
+    text = '为您找到武莹的销售数据，成交情况整体表现良好。';
+  } else if (question.includes('花园桥')) {
+    text = '花园桥校区的销售数据如下，成交表现优秀。';
+  } else if (question.includes('分析') || question.includes('排行') || question.includes('对比')) {
+    text = '分析结果如下：各部门10月成交情况整体稳步增长。';
+  }
+  return Promise.resolve({
+    object: {
+      text,
+      uiType: 'bar',
+      summary: '共分析 12 条销售数据，整体成交稳步增长',
       insights: ['花园桥校区表现最优，10月成交6单', '中关村校区连续4个月增长', '望京校区成交转化率有提升空间'],
       dataSummary: {
         departments: { '花园桥校区': 4, '中关村校区': 4, '望京校区': 4 },
@@ -95,30 +135,31 @@ const mockGenerateText = vi.fn().mockImplementation(({ prompt }: { prompt: strin
         totalDeal: 37,
       },
       suggestedChartType: 'bar',
-    }),
-  });
-});
-
-const mockGenerateObject = vi.fn().mockImplementation(({ prompt }: { prompt: string }) => {
-  if (prompt.includes('分析') || prompt.includes('排行') || prompt.includes('对比')) {
-    return Promise.resolve({
-      object: { intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis', 'ui-builder'], params: {} },
-    });
-  }
-  return Promise.resolve({
-    object: { intent: 'query', confidence: 0.8, agents: ['query'], params: {} },
+    },
   });
 });
 
 vi.mock('ai', () => ({
   generateText: (...args: unknown[]) => mockGenerateText(...args),
   generateObject: (...args: unknown[]) => mockGenerateObject(...args),
+  streamText: vi.fn(),
+  tool: vi.fn(),
+  zodSchema: vi.fn(),
 }));
 
 vi.mock('@/lib/llm/provider', () => ({
   openai: {},
   DEFAULT_MODEL: 'test-model',
   getDefaultModel: () => 'test-model',
+  generateTextCompat: (...args: unknown[]) => mockGenerateText(...args),
+}));
+
+vi.mock('@/lib/chat/tools/generate-visualization', () => ({
+  generateVisualization: {},
+}));
+
+vi.mock('@/lib/chat/prompts/data-analyst', () => ({
+  buildDataAnalystPrompt: () => 'mock-prompt',
 }));
 
 import { handleMessage } from '@/lib/chat/message-handler';
@@ -184,14 +225,16 @@ describe('Phase 2 E2E Pipeline', () => {
 
   describe('Graceful degradation', () => {
     it('should fallback to query results when analysis agent fails', async () => {
-      // Force analysis to fail on next call
+      // New flow: routeAndQuery → route fails → fallback → query succeeds → unifiedAgent fails
+      // The keyword "分析" will match keyword router first (confidence >= 0.7),
+      // so we need: queryAgent succeeds, then unifiedAgent fails
       mockGenerateText.mockImplementationOnce(() => {
-        // Router (generateObject) — route to analysis
+        // NL2SQL generation — succeed for query
         return Promise.resolve({
-          object: { intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis', 'ui-builder'], params: {} },
+          text: "SELECT * FROM sales_performance ORDER BY deal DESC LIMIT 10",
         });
       }).mockImplementationOnce(() => {
-        // Analysis agent — fail
+        // Unified analysis — fail
         throw new Error('LLM timeout');
       });
 

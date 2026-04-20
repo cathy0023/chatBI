@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -14,11 +13,11 @@ type ChatPanelProps = {
   error: string | null;
   sendMessage: (content: string) => void;
   clearMessages: () => void;
+  selectedMessageId?: string | null;
+  onSelectMessage?: (msg: ChatMessage) => void;
 };
 
-export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages }: ChatPanelProps) {
-  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
-
+export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages, selectedMessageId, onSelectMessage }: ChatPanelProps) {
   return (
     <div className="flex h-full flex-col min-h-0">
       {/* Chat Panel Header */}
@@ -54,11 +53,7 @@ export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessag
         messages={messages}
         isLoading={isLoading}
         selectedMessageId={selectedMessageId}
-        onSelectMessage={(msg) => {
-          if (msg.uiSchema || msg.visualization) {
-            setSelectedMessageId(msg.id === selectedMessageId ? null : msg.id);
-          }
-        }}
+        onSelectMessage={onSelectMessage}
       />
 
       {/* Input */}

@@ -2,20 +2,38 @@
 
 import { useState, useCallback, useRef } from 'react';
 
-export type VisualizationData = {
-  title: string;
-  description: string;
-  code: string;
-  dependencies?: Record<string, string>;
-};
+export type LoadingPhase =
+  | 'generating_sql'
+  | 'executing'
+  | 'analyzing'
+  | 'generating_chart'
+  | 'done'
+  | 'error';
 
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  uiSchema?: unknown;
-  visualization?: VisualizationData;
+  phase?: LoadingPhase;
+  sql?: string;
+  records?: Record<string, unknown>[];
+  columns?: string[];
+  chartHtml?: string;
 };
+
+const PHASE_LABELS: Record<LoadingPhase, string> = {
+  generating_sql: '正在理解您的问题...',
+  executing: '正在查询数据...',
+  analyzing: '正在分析数据...',
+  generating_chart: '正在生成图表...',
+  done: '',
+  error: '',
+};
+
+export function getPhaseLabel(phase?: LoadingPhase): string {
+  if (!phase || phase === 'done' || phase === 'error') return '';
+  return PHASE_LABELS[phase];
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -36,11 +54,10 @@ export function useChat() {
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
 
-    // Placeholder assistant message (will be filled via SSE)
     const assistantId = (Date.now() + 1).toString();
     setMessages(prev => [
       ...prev,
-      { id: assistantId, role: 'assistant', content: '', uiSchema: undefined, visualization: undefined },
+      { id: assistantId, role: 'assistant', content: '', phase: 'generating_sql' },
     ]);
 
     const abortController = new AbortController();
@@ -54,11 +71,8 @@ export function useChat() {
         signal: abortController.signal,
       });
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
 
-      // Parse SSE stream
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
@@ -72,8 +86,6 @@ export function useChat() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-
-        // Parse SSE events from buffer
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -83,7 +95,6 @@ export function useChat() {
           } else if (line.startsWith('data: ')) {
             currentData = line.slice(6);
           } else if (line === '' && currentEvent && currentData) {
-            // Empty line = end of event
             try {
               const parsed = JSON.parse(currentData);
 
@@ -91,7 +102,13 @@ export function useChat() {
                 case 'session':
                   setSessionId(parsed.sessionId);
                   break;
-
+                case 'status':
+                  setMessages(prev =>
+                    prev.map(m =>
+                      m.id === assistantId ? { ...m, phase: parsed.phase as LoadingPhase } : m,
+                    ),
+                  );
+                  break;
                 case 'text':
                   setMessages(prev =>
                     prev.map(m =>
@@ -99,45 +116,43 @@ export function useChat() {
                     ),
                   );
                   break;
-
-                case 'uiSchema':
+                case 'data':
                   setMessages(prev =>
                     prev.map(m =>
                       m.id === assistantId
-                        ? { ...m, uiSchema: parsed.uiSchema }
+                        ? { ...m, sql: parsed.sql, records: parsed.records, columns: parsed.columns }
                         : m,
                     ),
                   );
                   break;
-
-                case 'visualization':
+                case 'chart':
                   setMessages(prev =>
                     prev.map(m =>
-                      m.id === assistantId
-                        ? { ...m, visualization: parsed as VisualizationData }
-                        : m,
+                      m.id === assistantId ? { ...m, chartHtml: parsed.html } : m,
                     ),
                   );
                   break;
-
                 case 'error':
-                  setError(parsed.error);
+                  setError(parsed.error || parsed.message);
                   setMessages(prev =>
                     prev.map(m =>
                       m.id === assistantId
-                        ? { ...m, content: `处理出错: ${parsed.error}` }
+                        ? { ...m, content: `处理出错: ${parsed.error || parsed.message}`, phase: 'error' as LoadingPhase }
                         : m,
                     ),
                   );
                   break;
-
                 case 'done':
+                  setMessages(prev =>
+                    prev.map(m =>
+                      m.id === assistantId ? { ...m, phase: 'done' as LoadingPhase } : m,
+                    ),
+                  );
                   break;
               }
             } catch {
               // Skip malformed events
             }
-
             currentEvent = '';
             currentData = '';
           }
@@ -149,7 +164,9 @@ export function useChat() {
       setError(errorMsg);
       setMessages(prev =>
         prev.map(m =>
-          m.id === assistantId ? { ...m, content: `请求失败: ${errorMsg}` } : m,
+          m.id === assistantId
+            ? { ...m, content: `请求失败: ${errorMsg}`, phase: 'error' as LoadingPhase }
+            : m,
         ),
       );
     } finally {
@@ -159,7 +176,6 @@ export function useChat() {
   }, [isLoading, sessionId]);
 
   const clearMessages = useCallback(() => {
-    // Abort any pending request
     abortRef.current?.abort();
     setMessages([]);
     setSessionId(undefined);
@@ -174,11 +190,11 @@ export function useChat() {
       if (!res.ok) throw new Error('Failed to load session');
       const data = await res.json();
       const loaded: ChatMessage[] = (data.messages || []).map(
-        (m: { id: string; role: string; content: string; uiSchema: unknown }) => ({
+        (m: { id: string; role: string; content: string }) => ({
           id: m.id,
           role: m.role as 'user' | 'assistant',
           content: m.content,
-          uiSchema: m.uiSchema,
+          phase: 'done' as LoadingPhase,
         }),
       );
       setMessages(loaded);

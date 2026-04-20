@@ -6,10 +6,10 @@ const inputSchema = z.object({
   description: z.string().describe('简要描述这个可视化展示了什么'),
   code: z.string().describe(
     '完整的 React 组件代码。要求：\n' +
-    '1. export default function App() { ... } 格式\n' +
-    '2. 使用 echarts 和 echarts-for-react 库\n' +
-    '3. import ReactECharts from "echarts-for-react"\n' +
-    '4. import * as echarts from "echarts/core" + 按需 import charts\n' +
+    '1. function App() { ... } 格式（不加 export default）\n' +
+    '2. 不要写 import 语句，echarts 和 ReactECharts 已在环境中可用\n' +
+    '3. 不要写 echarts.use() 调用，图表组件已注册\n' +
+    '4. 使用 <ReactECharts echarts={echarts} option={option} /> 渲染图表\n' +
     '5. 数据直接内嵌在代码中\n' +
     '6. 组件必须自包含，不依赖外部变量'
   ),

@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db/connection';
+import { cleanupOldSessions } from '@/lib/db/queries';
 import { v4 as uuidv4 } from 'uuid';
 
-// GET /api/sessions - List all sessions
+const MAX_SESSIONS = 20;
+
+// GET /api/sessions - List all sessions (max 20, auto-cleanup old ones)
 export async function GET() {
   try {
+    // Auto-cleanup sessions beyond the limit
+    const deleted = cleanupOldSessions(MAX_SESSIONS);
+    if (deleted > 0) {
+      console.log(`[Sessions] Cleaned up ${deleted} old sessions`);
+    }
+
     const db = getDb();
     const sessions = db
       .prepare(
@@ -12,9 +21,9 @@ export async function GET() {
           (SELECT COUNT(*) FROM chat_messages WHERE session_id = s.id) as message_count
          FROM chat_sessions s
          ORDER BY s.created_at DESC
-         LIMIT 50`,
+         LIMIT ?`,
       )
-      .all() as Array<{
+      .all(MAX_SESSIONS) as Array<{
         id: string;
         title: string | null;
         created_at: string;

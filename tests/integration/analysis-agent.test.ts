@@ -51,11 +51,18 @@ const mockGenerateText = vi.fn().mockResolvedValue({
   }),
 });
 
+const mockGenerateObject = vi.fn().mockResolvedValue({
+  object: {
+    summary: '各部门10月成交表现优秀，花园桥校区领先',
+    insights: ['花园桥校区成交最高', '中关村校区稳步增长', '加微转化率有提升空间'],
+    dataSummary: { departments: { '花园桥校区': 4, '中关村校区': 4 }, totalCount: 8, totalDeal: 29 },
+    suggestedChartType: 'bar',
+  },
+});
+
 vi.mock('ai', () => ({
   generateText: (...args: unknown[]) => mockGenerateText(...args),
-  generateObject: vi.fn().mockResolvedValue({
-    object: { intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis', 'ui-builder'], params: {} },
-  }),
+  generateObject: (...args: unknown[]) => mockGenerateObject(...args),
 }));
 
 vi.mock('@/lib/llm/provider', () => ({
@@ -133,9 +140,9 @@ describe('Analysis Agent', () => {
   });
 
   describe('LLM response parsing', () => {
-    it('should handle JSON wrapped in markdown code block', async () => {
-      mockGenerateText.mockResolvedValueOnce({
-        text: '```json\n{"summary":"test","insights":["a"],"dataSummary":{"totalCount":1},"suggestedChartType":"table"}\n```',
+    it('should handle generateObject returning custom analysis', async () => {
+      mockGenerateObject.mockResolvedValueOnce({
+        object: { summary: 'test', insights: ['a'], dataSummary: { totalCount: 1 }, suggestedChartType: 'table' },
       });
 
       const result = await agent.execute({
@@ -147,9 +154,9 @@ describe('Analysis Agent', () => {
       expect(result.insights).toEqual(['a']);
     });
 
-    it('should handle raw JSON response', async () => {
-      mockGenerateText.mockResolvedValueOnce({
-        text: '{"summary":"raw","insights":["b"],"dataSummary":{"totalCount":1},"suggestedChartType":"pie"}',
+    it('should handle generateObject returning pie chart type', async () => {
+      mockGenerateObject.mockResolvedValueOnce({
+        object: { summary: 'raw', insights: ['b'], dataSummary: { totalCount: 1 }, suggestedChartType: 'pie' },
       });
 
       const result = await agent.execute({
@@ -161,9 +168,9 @@ describe('Analysis Agent', () => {
       expect(result.suggestedChartType).toBe('pie');
     });
 
-    it('should fallback to defaults for missing LLM fields', async () => {
-      mockGenerateText.mockResolvedValueOnce({
-        text: '{"summary":"","insights":null,"dataSummary":{}}',
+    it('should fallback to defaults for missing optional LLM fields', async () => {
+      mockGenerateObject.mockResolvedValueOnce({
+        object: { summary: '', insights: [], dataSummary: {} },
       });
 
       const result = await agent.execute({
@@ -173,17 +180,17 @@ describe('Analysis Agent', () => {
 
       expect(result.summary).toBe('');
       expect(result.insights).toEqual([]);
-      expect(result.suggestedChartType).toBe('table'); // default
+      expect(result.suggestedChartType).toBeUndefined();
     });
   });
 
   describe('Error handling', () => {
-    it('should retry and recover from invalid JSON on second attempt', async () => {
-      // First call returns invalid JSON, second call returns valid JSON (retry)
-      mockGenerateText
-        .mockResolvedValueOnce({ text: 'This is not JSON at all' })
+    it('should retry and recover from LLM error on second attempt', async () => {
+      // First call throws, second call returns valid object (retry)
+      mockGenerateObject
+        .mockRejectedValueOnce(new Error('LLM error'))
         .mockResolvedValueOnce({
-          text: '{"summary":"recovered","insights":["ok"],"dataSummary":{},"suggestedChartType":"table"}',
+          object: { summary: 'recovered', insights: ['ok'], dataSummary: {}, suggestedChartType: 'table' },
         });
 
       // BaseAgent retries once — second attempt should succeed

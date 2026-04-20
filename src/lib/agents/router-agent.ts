@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { BaseAgent } from './base-agent';
-import { generateText } from 'ai';
-import { getDefaultModel } from '@/lib/llm/provider';
+import { generateTextCompat } from '@/lib/llm/provider';
 
 // Input: raw user message
 const routerInputSchema = z.object({
@@ -24,19 +23,8 @@ type RouterOutput = {
   params: Record<string, unknown>;
 };
 
-// Parse JSON from generateText response
-function parseRouterResult(text: string): RouterOutput {
-  const jsonStr = text.replace(/```json\n?/, '').replace(/```\n?/, '').trim();
-  const raw = JSON.parse(jsonStr);
-  return {
-    intent: raw.intent || 'query',
-    confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.7,
-    agents: Array.isArray(raw.agents) ? raw.agents : ['query'],
-    params: raw.params || {},
-  };
-}
-
-const ROUTER_PROMPT = `你是一个销售业绩 BI 系统的意图分类器。
+// System prompt — separated from user input to prevent prompt injection
+const ROUTER_SYSTEM_PROMPT = `你是一个销售业绩 BI 系统的意图分类器。
 
 数据域: 在线教育销售团队，包含姓名、部门、月份（7-10月）、加微/互动/需求/成交四个指标。
 
@@ -58,9 +46,45 @@ agent 列表规则:
 - "谁的表现最好" → {"intent":"analysis","confidence":0.9,"agents":["query","analysis"],"params":{}}
 - "帮我写一份跟进话术" → {"intent":"generation","confidence":0.9,"agents":["query","generator"],"params":{}}
 
-用户消息: "{message}"
-
 只输出JSON，不要其他内容。`;
+
+/**
+ * Parse JSON from LLM response — robust against various output formats.
+ * Handles: markdown code blocks, surrounding text, empty responses.
+ */
+function parseRouterResult(text: string): RouterOutput {
+  const fallback: RouterOutput = {
+    intent: 'query',
+    confidence: 0.5,
+    agents: ['query'],
+    params: {},
+  };
+
+  try {
+    // Try direct parse first
+    let jsonStr = text.replace(/```json\n?/, '').replace(/```\n?/, '').trim();
+
+    // If direct parse fails, try to extract JSON object from text
+    let raw: Record<string, unknown>;
+    try {
+      raw = JSON.parse(jsonStr);
+    } catch {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return fallback;
+      raw = JSON.parse(jsonMatch[0]);
+    }
+
+    return {
+      intent: (['query', 'analysis', 'generation', 'training'].includes(raw.intent as string)
+        ? raw.intent : 'query') as RouterOutput['intent'],
+      confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.5,
+      agents: Array.isArray(raw.agents) ? raw.agents : ['query'],
+      params: (raw.params && typeof raw.params === 'object') ? raw.params as Record<string, unknown> : {},
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 export class RouterAgent extends BaseAgent<RouterInput, RouterOutput> {
   readonly name = 'Router Agent';
@@ -73,9 +97,10 @@ export class RouterAgent extends BaseAgent<RouterInput, RouterOutput> {
   });
 
   protected async run(input: RouterInput): Promise<RouterOutput> {
-    const result = await generateText({
-      model: getDefaultModel(),
-      prompt: ROUTER_PROMPT.replace('{message}', input.message),
+    // Use messages array to prevent prompt injection (user input in separate role)
+    const result = await generateTextCompat({
+      system: ROUTER_SYSTEM_PROMPT,
+      prompt: input.message,
     });
 
     return parseRouterResult(result.text);

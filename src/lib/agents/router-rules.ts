@@ -1,4 +1,5 @@
 import { AGENT_REGISTRY } from '@/types/agent';
+import { KEYWORD_CONFIDENCE_BASE, KEYWORD_CONFIDENCE_STEP, KEYWORD_CONFIDENCE_MAX } from './constants';
 
 type RuleMatch = {
   agents: string[];
@@ -7,12 +8,11 @@ type RuleMatch = {
   intent: string;
 };
 
-// Priority order: analysis > generator > ui-builder > query
+// Priority order: analysis > generator > query
 // More specialized agents should win when they match
 const AGENT_PRIORITY: Record<string, number> = {
   analysis: 4,
   generator: 3,
-  'ui-builder': 2,
   query: 1,
 };
 
@@ -21,7 +21,6 @@ const INTENT_MAP: Record<string, string> = {
   query: 'query',
   analysis: 'analysis',
   generator: 'generation',
-  'ui-builder': 'query',
 };
 
 export function matchByKeywords(query: string): RuleMatch | null {
@@ -38,7 +37,7 @@ export function matchByKeywords(query: string): RuleMatch | null {
   for (const [agentKey, definition] of Object.entries(AGENT_REGISTRY)) {
     const matchedKeywords = definition.keywords.filter(kw => queryLower.includes(kw));
     if (matchedKeywords.length > 0) {
-      const confidence = Math.min(0.5 + matchedKeywords.length * 0.12, 0.95);
+      const confidence = Math.min(KEYWORD_CONFIDENCE_BASE + matchedKeywords.length * KEYWORD_CONFIDENCE_STEP, KEYWORD_CONFIDENCE_MAX);
       const priority = AGENT_PRIORITY[agentKey] || 0;
       allMatches.push({ agentKey, matchedKeywords, confidence, priority });
     }
@@ -57,11 +56,9 @@ export function matchByKeywords(query: string): RuleMatch | null {
   // Build agent chain based on intent
   let agents: string[] = [];
   if (best.agentKey === 'analysis') {
-    agents = ['query', 'analysis', 'ui-builder'];
+    agents = ['query', 'analysis'];
   } else if (best.agentKey === 'generator') {
     agents = ['query', 'generator'];
-  } else if (best.agentKey === 'ui-builder') {
-    agents = ['query', 'ui-builder'];
   } else {
     agents = ['query'];
   }

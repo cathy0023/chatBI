@@ -112,7 +112,7 @@ describe('BaseAgent', () => {
   describe('Error Types', () => {
     it('AgentValidationError should have correct properties', () => {
       const issues: z.ZodIssue[] = [
-        { message: 'Required', path: ['field'], code: 'invalid_type', expected: 'string', received: 'undefined' },
+        { message: 'Required', path: ['field'], code: 'invalid_type' as const, expected: 'string' as const },
       ];
       const err = new AgentValidationError('TestAgent', 'input', issues);
       expect(err.name).toBe('AgentValidationError');

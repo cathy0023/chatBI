@@ -1,16 +1,26 @@
+import { streamText } from 'ai';
 import { RouterAgent } from '@/lib/agents/router-agent';
-import { QueryAgent } from '@/lib/agents/query-agent';
-import { AnalysisAgent } from '@/lib/agents/analysis-agent';
-import { ResponseGenerator } from '@/lib/agents/response-generator';
-import { updateSessionTitle } from '@/lib/db/queries';
+import { UnifiedAnalysisResponse, type UnifiedOutput } from '@/lib/agents/unified-analysis-response';
+import { matchByKeywords } from '@/lib/agents/router-rules';
+import { getSession, updateSessionTitle } from '@/lib/db/queries';
+import { queryAgent } from '@/lib/agents/agent-instances';
+import { buildUISchema } from '@/lib/agents/chart-recommender';
+import { KEYWORD_CONFIDENCE_THRESHOLD, GREETING_PATTERNS, GREETING_RESPONSE } from '@/lib/agents/constants';
+import { buildDataAnalystPrompt } from '@/lib/chat/prompts/data-analyst';
+import { getDefaultModel } from '@/lib/llm/provider';
 import type { RouterOutput } from '@/types/agent';
-import type { AnalysisOutput } from '@/lib/agents/analysis-agent';
-import { getColumnLabel, SALES_COLUMN_META } from '@/types/database';
 
 const routerAgent = new RouterAgent();
-const queryAgent = new QueryAgent();
-const analysisAgent = new AnalysisAgent();
-const responseGenerator = new ResponseGenerator();
+const unifiedAgent = new UnifiedAnalysisResponse();
+
+// ==================== Types ====================
+
+export type SSEEvent =
+  | { type: 'text'; data: { text: string } }
+  | { type: 'uiSchema'; data: { uiSchema: unknown } }
+  | { type: 'visualization'; data: unknown }
+  | { type: 'done'; data: Record<string, unknown> }
+  | { type: 'error'; data: { error: string } };
 
 export type HandlerResult = {
   text: string;
@@ -18,133 +28,274 @@ export type HandlerResult = {
   agentTrace?: unknown;
 };
 
-const GREETING_PATTERNS = /^(你好|您好|嗨|hi|hello|hey|哈喽|早上好|下午好|晚上好)[\s!！。.]*$/i;
+// ==================== Legacy Handler (for tests) ====================
 
+/**
+ * Legacy synchronous handler — used by tests and SSE wrapper.
+ * For streaming, use handleStreaming() instead.
+ */
 export async function handleMessage(userMessage: string, sessionId: string): Promise<HandlerResult> {
-  // Auto-generate session title from first user message (non-greeting)
+  // Auto-generate session title from first user message
   if (!GREETING_PATTERNS.test(userMessage.trim())) {
     try {
-      const title = userMessage.length > 30 ? userMessage.slice(0, 30) + '…' : userMessage;
-      updateSessionTitle(sessionId, title);
+      const session = getSession(sessionId);
+      if (!session || !session.title) {
+        const title = userMessage.length > 30 ? userMessage.slice(0, 30) + '…' : userMessage;
+        updateSessionTitle(sessionId, title);
+      }
     } catch {
-      // Title update is non-critical
+      // Title update is non-critical — ignore
     }
   }
 
-  // Step 0: Greeting fast-path — skip LLM calls
+  // Greeting fast-path
   if (GREETING_PATTERNS.test(userMessage.trim())) {
-    return {
-      text: '您好！我是 ChatBI 销售业绩分析助手，可以帮您查询和分析团队销售数据。\n\n您可以试试：\n- 「花园桥校区的业绩」\n- 「分析各部门10月成交情况」\n- 「成交排行榜」\n- 「武莹的销售数据」',
-      uiSchema: null,
-    };
+    return { text: GREETING_RESPONSE, uiSchema: null };
   }
 
-  // Step 1: Route the message (pure LLM)
-  let route: RouterOutput;
-  try {
-    route = await routerAgent.execute({
-      message: userMessage,
-    });
-  } catch (err) {
-    console.error('[Handler] Router error:', err);
-    route = {
-      intent: 'query',
-      confidence: 0.5,
-      agents: ['query'],
-      params: { message: userMessage },
-    };
+  // Route → Query → Process
+  const { route, routeSource, queryResult } = await routeAndQuery(userMessage);
+  const trace = { route: { ...route, source: routeSource }, steps: ['query'] as string[] };
+
+  return processQueryResult(queryResult.records, userMessage, route, trace);
+}
+
+// ==================== Streaming Handler ====================
+
+/**
+ * Streaming handler — yields SSE events for real-time response.
+ * This is the primary entry point for route.ts.
+ */
+export async function* handleStreaming(
+  userMessage: string,
+  sessionId: string,
+): AsyncGenerator<SSEEvent> {
+  // Auto-generate session title
+  if (!GREETING_PATTERNS.test(userMessage.trim())) {
+    try {
+      const session = getSession(sessionId);
+      if (!session || !session.title) {
+        const title = userMessage.length > 30 ? userMessage.slice(0, 30) + '…' : userMessage;
+        updateSessionTitle(sessionId, title);
+      }
+    } catch {
+      // Title update is non-critical — ignore
+    }
   }
 
-  const trace = { route, steps: [] as string[] };
+  // Greeting fast-path
+  if (GREETING_PATTERNS.test(userMessage.trim())) {
+    yield { type: 'text', data: { text: GREETING_RESPONSE } };
+    yield { type: 'done', data: {} };
+    return;
+  }
+
+  // Route → Query
+  const { route, routeSource, queryResult } = await routeAndQuery(userMessage);
+
+  // No results — return fallback message
+  if (queryResult.records.length === 0) {
+    if (route.agents.includes('generator')) {
+      yield { type: 'text', data: { text: '内容生成功能正在开发中，敬请期待。' } };
+    } else {
+      yield { type: 'text', data: { text: '抱歉，没有找到相关的销售数据。请尝试换个关键词，例如部门名称、人员姓名或月份。' } };
+    }
+    yield { type: 'done', data: {} };
+    return;
+  }
+
+  // Data found → stream text analysis
+  const systemPrompt = buildDataAnalystPrompt(userMessage, queryResult.records);
+  let fullText = '';
+
+  // Generate instant fallback text from data (no LLM needed)
+  const fallbackText = formatDataSummary(queryResult.records, userMessage);
 
   try {
-    // Step 2: Query with LLM understanding
-    const queryResult = await queryAgent.execute({
-      query: userMessage,
-      searchType: 'sales',
+    const streamResult = streamText({
+      model: getDefaultModel(),
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
     });
-    trace.steps.push('query');
 
-    const records = queryResult.records;
-
-    // Step 3: If data found, generate response
-    if (records.length > 0) {
-      let analysisResult: AnalysisOutput | undefined;
-
-      // Run analysis if routed to analysis agents
-      if (route.agents.includes('analysis')) {
-        try {
-          analysisResult = await analysisAgent.execute({
-            query: userMessage,
-            records,
-          });
-          trace.steps.push('analysis');
-        } catch (analysisErr) {
-          console.error('[Handler] Analysis agent error:', analysisErr);
-          trace.steps.push('analysis-fallback');
-        }
+    // Set a deadline: if LLM doesn't produce text in 15s, use fallback
+    const deadline = setTimeout(() => {
+      if (fullText.length === 0) {
+        console.log('[Handler] LLM text timeout, using fallback');
       }
+    }, 15000);
 
-      // Step 4: Generate natural language response
-      let responseText: string;
-      let uiType: string;
-
-      try {
-        const response = await responseGenerator.execute({
-          query: userMessage,
-          records,
-          analysis: analysisResult ? {
-            summary: analysisResult.summary,
-            insights: analysisResult.insights,
-            suggestedChartType: analysisResult.suggestedChartType,
-          } : undefined,
-        });
-        trace.steps.push('response');
-        responseText = response.text;
-        uiType = response.uiType;
-      } catch (responseErr) {
-        console.error('[Handler] Response generator error:', responseErr);
-        trace.steps.push('response-fallback');
-        responseText = formatFallbackText(records, analysisResult);
-        uiType = analysisResult?.suggestedChartType || 'table';
-      }
-
-      const uiSchema = buildUISchema(records, userMessage, analysisResult, uiType);
-      return { text: responseText, uiSchema, agentTrace: trace };
+    for await (const chunk of streamResult.textStream) {
+      fullText += chunk;
+      yield { type: 'text', data: { text: fullText } };
     }
 
-    // No data found
-    if (route.agents.includes('generator')) {
+    clearTimeout(deadline);
+    await streamResult.text;
+  } catch {
+    // streamText failed → use fallback text
+    console.error('[Handler] streamText error, using fallback text');
+  }
+
+  // If LLM produced no text, use the data-based fallback
+  if (fullText.length === 0) {
+    fullText = fallbackText;
+    yield { type: 'text', data: { text: fullText } };
+  }
+
+  // === Chart: ALWAYS produce a chart event ===
+  // Use buildUISchema which generates reliable ECharts options from data
+  const uiSchema = buildUISchema(queryResult.records, userMessage);
+  yield { type: 'uiSchema', data: { uiSchema } };
+
+  yield { type: 'done', data: {} };
+}
+
+// ==================== Shared Helpers ====================
+
+/**
+ * Route and query — shared between streaming and legacy paths.
+ */
+async function routeAndQuery(userMessage: string): Promise<{
+  route: RouterOutput;
+  routeSource: 'keyword' | 'llm' | 'fallback';
+  queryResult: Awaited<ReturnType<typeof queryAgent.execute>>;
+}> {
+  const keywordMatch = matchByKeywords(userMessage);
+
+  // High-confidence keyword match — skip LLM router
+  if (keywordMatch && keywordMatch.confidence >= KEYWORD_CONFIDENCE_THRESHOLD) {
+    const route: RouterOutput = {
+      intent: (keywordMatch.intent as RouterOutput['intent']) || 'query',
+      confidence: keywordMatch.confidence,
+      agents: keywordMatch.agents,
+      params: {},
+    };
+    try {
+      const queryResult = await queryAgent.execute({ query: userMessage, searchType: 'sales' });
+      return { route, routeSource: 'keyword', queryResult };
+    } catch (queryErr) {
+      console.error('[routeAndQuery] keyword query failed, falling back:', queryErr instanceof Error ? queryErr.message : String(queryErr));
+      // Return empty results — handler will show "no data" message
       return {
-        text: '内容生成功能正在开发中，敬请期待。',
-        uiSchema: null,
-        agentTrace: trace,
+        route,
+        routeSource: 'keyword',
+        queryResult: { records: [], totalCount: 0, query: userMessage, searchType: 'sales', confidence: 0 },
       };
     }
+  }
 
-    return {
-      text: '抱歉，没有找到相关的销售数据。请尝试换个关键词，例如部门名称、人员姓名或月份。',
-      uiSchema: null,
-      agentTrace: trace,
-    };
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    return {
-      text: `处理您的问题时遇到错误：${errorMsg}。请稍后重试。`,
-      agentTrace: { ...trace, error: errorMsg },
-    };
+  // LLM router + query in parallel
+  try {
+    const [llmRoute, queryResult] = await Promise.all([
+      routerAgent.execute({ message: userMessage }),
+      queryAgent.execute({ query: userMessage, searchType: 'sales' }),
+    ]);
+    return { route: llmRoute, routeSource: 'llm', queryResult };
+  } catch (outerErr) {
+    // LLM router failed — graceful degradation: try query alone
+    try {
+      const queryResult = await queryAgent.execute({ query: userMessage, searchType: 'sales' });
+      return {
+        route: { intent: 'query', confidence: 0.5, agents: ['query'], params: {} },
+        routeSource: 'fallback',
+        queryResult,
+      };
+    } catch (innerErr) {
+      // Both router and query failed — return empty result gracefully
+      console.error('[Handler] RouteAndQuery: both router and query failed', innerErr instanceof Error ? innerErr.message : String(innerErr));
+      return {
+        route: { intent: 'query', confidence: 0.5, agents: ['query'], params: {} },
+        routeSource: 'fallback',
+        queryResult: { records: [], totalCount: 0, query: userMessage, searchType: 'sales', confidence: 0 },
+      };
+    }
   }
 }
 
-// Fallback text formatting when ResponseGenerator fails
-function formatFallbackText(
+/**
+ * Process query results with unified agent — extracted for testability.
+ */
+export async function processQueryResult(
   records: Record<string, unknown>[],
-  analysis?: AnalysisOutput,
-): string {
-  if (analysis) {
-    const insightList = analysis.insights.map((ins: string, i: number) => `${i + 1}. ${ins}`).join('\n');
-    return `基于 ${records.length} 条数据的分析：\n\n摘要: ${analysis.summary}\n\n关键洞察:\n${insightList}`;
+  query: string,
+  routeResult: RouterOutput,
+  traceData: { route: unknown; steps: string[] },
+): Promise<HandlerResult> {
+  if (records.length === 0) {
+    if (routeResult.agents.includes('generator')) {
+      return {
+        text: '内容生成功能正在开发中，敬请期待。',
+        uiSchema: null,
+        agentTrace: traceData,
+      };
+    }
+    return {
+      text: '抱歉，没有找到相关的销售数据。请尝试换个关键词，例如部门名称、人员姓名或月份。',
+      uiSchema: null,
+      agentTrace: traceData,
+    };
   }
+
+  const shouldAnalyze = routeResult.agents.includes('analysis');
+
+  let unifiedResult: UnifiedOutput;
+  try {
+    unifiedResult = await unifiedAgent.execute({
+      query,
+      records,
+      needsAnalysis: shouldAnalyze,
+    });
+    traceData.steps.push('unified');
+  } catch (unifiedErr) {
+    console.error('[Handler] Unified agent error:', unifiedErr);
+    traceData.steps.push('unified-fallback');
+    return {
+      text: formatFallbackText(records),
+      uiSchema: buildUISchema(records, query),
+      agentTrace: traceData,
+    };
+  }
+
+  const analysisOutput = shouldAnalyze
+    ? {
+        summary: unifiedResult.summary,
+        insights: unifiedResult.insights,
+        dataSummary: unifiedResult.dataSummary,
+        suggestedChartType: unifiedResult.suggestedChartType,
+      }
+    : undefined;
+
+  const uiSchema = buildUISchema(records, query, analysisOutput, unifiedResult.uiType);
+  return { text: unifiedResult.text, uiSchema, agentTrace: traceData };
+}
+
+function formatList(items: Array<{ label: string; value: number }>, unit: string): string {
+  const lines = items.slice(0, 10).map((item, i) => `${i + 1}. ${item.label}: ${item.value}笔`);
+  return `查询到 ${items.length} ${unit}，前10名：\n${lines.join('\n')}`;
+}
+
+function formatDataSummary(records: Record<string, unknown>[], query: string): string {
+  if (records.length === 0) return '没有找到匹配的数据。';
+
+  const keys = Object.keys(records[0]);
+  const wantPerson = /销售|人员|谁|top|前|排行|排名|个人|名字/.test(query);
+  const deal = (r: Record<string, unknown>) => Number(r.deal || 0);
+
+  // Month trend (no person/dept dimension)
+  if (keys.includes('month') && !keys.includes('name') && !keys.includes('department')) {
+    return `月度数据：\n${records.map(r => `${r.month}: ${deal(r)}笔`).join(' → ')}`;
+  }
+
+  // Determine display dimension by data shape + query intent
+  const showPerson = keys.includes('name') && (wantPerson || !keys.includes('department'));
+  const dim = showPerson ? 'name' : 'department';
+  const unit = showPerson ? '条数据' : '个部门';
+
+  return formatList(records.map(r => ({ label: String(r[dim] || ''), value: deal(r) })), unit);
+}
+
+function formatFallbackText(records: Record<string, unknown>[]): string {
   const items = records.slice(0, 5).map((r, i) => {
     const name = String(r.name || '');
     const dept = String(r.department || '');
@@ -153,132 +304,4 @@ function formatFallbackText(
     return `${i + 1}. ${name} [${dept}] ${month} - 成交: ${deal}`;
   });
   return `找到 ${records.length} 条结果:\n\n${items.join('\n')}`;
-}
-
-// Detect if the query asks for multi-month rankings (e.g., "各月前五名", "四个月各自的排名")
-function detectMultiMonthRanking(query: string, records: Record<string, unknown>[]): boolean {
-  const rankingKws = ['排名', '排行', '前五', '前5', 'top', '前几', '前10', '前十', '最好', '最高', '最多'];
-  const multiMonthKws = ['各月', '每个月', '各自', '四个月', '各个月', '分别', '每月', '个月'];
-  const lowerQuery = query.toLowerCase();
-  const hasRanking = rankingKws.some(kw => lowerQuery.includes(kw));
-  const hasMultiMonth = multiMonthKws.some(kw => query.includes(kw));
-  const monthsInData = new Set(records.map(r => String(r.month || '')));
-  return hasRanking && (hasMultiMonth || monthsInData.size > 1);
-}
-
-// Build composite-key chart data for multi-month ranking: "月份 姓名" → metric value
-function buildRankingChartData(
-  records: Record<string, unknown>[],
-  metric: string,
-): Record<string, number> {
-  const byMonth: Record<string, Array<{ key: string; value: number }>> = {};
-  for (const r of records) {
-    const month = String(r.month || '');
-    const name = String(r.name || '');
-    const value = Number(r[metric] || 0);
-    if (!byMonth[month]) byMonth[month] = [];
-    byMonth[month].push({ key: `${month} ${name}`, value });
-  }
-  const result: Record<string, number> = {};
-  for (const month of Object.keys(byMonth).sort()) {
-    const items = byMonth[month].sort((a, b) => b.value - a.value).slice(0, 5);
-    for (const item of items) {
-      result[item.key] = item.value;
-    }
-  }
-  return result;
-}
-
-// Unified UISchema builder — single source of truth for right panel data
-function buildUISchema(
-  records: Record<string, unknown>[],
-  query: string,
-  analysis?: AnalysisOutput,
-  uiType?: string,
-): unknown {
-  const rows = records.map(r => ({
-    name: String(r.name || ''),
-    department: String(r.department || ''),
-    month: String(r.month || ''),
-    wechat_added: Number(r.wechat_added || 0),
-    interaction: Number(r.interaction || 0),
-    demand: Number(r.demand || 0),
-    deal: Number(r.deal || 0),
-  }));
-
-  // Determine the aggregation dimension and metric from the query
-  const dimension = detectChartDimension(query);
-  const metric = detectMetricFromQuery(query);
-
-  // For multi-month ranking queries, use table view with all rows
-  const isMultiMonthRanking = detectMultiMonthRanking(query, records);
-  const aggregation = isMultiMonthRanking
-    ? buildRankingChartData(records, metric)
-    : aggregateBy(records, dimension, metric);
-
-  return {
-    type: isMultiMonthRanking ? 'table' : (uiType || analysis?.suggestedChartType || 'table'),
-    data: {
-      rows,
-      // Chart data: single aggregation, dimension-aware
-      chartData: aggregation,
-      dimension,
-      metric,
-      metricLabel: getColumnLabel(metric),
-      dimensionLabel: getColumnLabel(dimension),
-      totalCount: records.length,
-      ...(analysis?.dataSummary || {}),
-    },
-    title: query,
-    summary: analysis?.summary,
-    insights: analysis?.insights,
-  };
-}
-
-// Generic aggregation: group records by any dimension field, sum any metric field
-function aggregateBy(
-  records: Record<string, unknown>[],
-  dimension: string,
-  metric: string,
-): Record<string, number> {
-  const agg: Record<string, number> = {};
-  for (const r of records) {
-    const key = String(r[dimension] || 'unknown');
-    const value = Number(r[metric] || 0);
-    agg[key] = (agg[key] || 0) + value;
-  }
-  // Sort by value descending (month dimension keeps natural order)
-  if (dimension !== 'month') {
-    return Object.fromEntries(Object.entries(agg).sort(([, a], [, b]) => b - a));
-  }
-  return agg;
-}
-
-// Detect which dimension the user wants to see on the chart axis
-function detectChartDimension(query: string): 'name' | 'month' | 'department' {
-  const personKeywords = ['销售员', '销售人员', '人员', '谁', '个人', '每个人', '各人', '各位', '名字'];
-  const monthKeywords = ['月份', '各月', '每月', '月度', '趋势', '变化', '走势'];
-  const deptKeywords = ['部门', '校区', '各部', '各部门', '团队', '中心'];
-
-  const lowerQuery = query.toLowerCase();
-
-  if (personKeywords.some(kw => lowerQuery.includes(kw))) return 'name';
-  if (deptKeywords.some(kw => lowerQuery.includes(kw))) return 'department';
-  if (monthKeywords.some(kw => lowerQuery.includes(kw))) return 'month';
-
-  return 'month';
-}
-
-// Detect which metric the user cares about — reuses column metadata labels
-function detectMetricFromQuery(query: string): string {
-  // Match Chinese labels from SALES_COLUMN_META against the query
-  for (const [key, meta] of Object.entries(SALES_COLUMN_META)) {
-    if (meta.role === 'metric' && query.includes(meta.label.replace('数', ''))) {
-      return key;
-    }
-  }
-  // Extra Chinese aliases not in the label
-  if (/成交|销量|成单/.test(query)) return 'deal';
-  if (/互动|企微/.test(query)) return 'interaction';
-  return 'deal';
 }

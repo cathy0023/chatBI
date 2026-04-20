@@ -1,164 +1,72 @@
 'use client';
 
 import { useState } from 'react';
-import dynamic from 'next/dynamic';
-import ReactEChartsCore from 'echarts-for-react/lib/core';
-import * as echarts from 'echarts/core';
-import { BarChart, PieChart, LineChart, RadarChart } from 'echarts/charts';
-import {
-  GridComponent,
-  TooltipComponent,
-  TitleComponent,
-  LegendComponent,
-} from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import type { ChatMessage } from '@/lib/chat/use-chat';
+import { getPhaseLabel } from '@/lib/chat/use-chat';
 
-echarts.use([
-  BarChart, PieChart, LineChart, RadarChart,
-  GridComponent, TooltipComponent, TitleComponent, LegendComponent,
-  CanvasRenderer,
-]);
-
-const SandpackRenderer = dynamic(
-  () => import('./sandpack-renderer').then(m => ({ default: m.SandpackRenderer })),
-  { ssr: false, loading: () => <SandpackLoadingSkeleton /> },
-);
-
-type VisualizationData = {
-  title: string;
-  description: string;
-  code: string;
-  dependencies?: Record<string, string>;
+type RenderAreaProps = {
+  message: ChatMessage | null;
+  isLoading: boolean;
 };
 
-function SandpackLoadingSkeleton() {
+function LoadingIndicator({ phase }: { phase?: string }) {
+  const label = getPhaseLabel(phase as ChatMessage['phase']) || 'AI 正在分析数据...';
   return (
-    <div className="w-full h-[500px] rounded-lg border overflow-hidden flex items-center justify-center bg-muted/30">
-      <div className="flex flex-col items-center gap-2">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-        <p className="text-sm text-muted-foreground">加载可视化沙箱...</p>
-      </div>
+    <div className="flex h-full flex-col items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardContent className="flex flex-col items-center gap-3 pt-6">
+          <div className="flex h-24 w-full items-center justify-center rounded-lg border-2 border-dashed border-blue-300 bg-blue-50/50">
+            <div className="flex flex-col items-center gap-2">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+              <p className="text-blue-600 text-sm">{label}</p>
+            </div>
+          </div>
+          <p className="text-muted-foreground text-xs text-center">
+            分析完成后，可视化结果将在此处显示
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-type UISchema = {
-  type: string;
-  data: Record<string, unknown>;
-  title: string;
-  summary?: string;
-  insights?: string[];
-};
-
-type RenderAreaProps = {
-  schema: UISchema | null;
-  isLoading?: boolean;
-  visualization?: VisualizationData;
-};
-
-function buildEChartsOption(schema: UISchema): Record<string, unknown> | null {
-  const { type, data, title } = schema;
-
-  // Read labels from schema metadata (passed by backend), not hardcoded
-  const chartData = data.chartData as Record<string, number> | undefined;
-  const yLabel = (data.metricLabel as string) || (data.metric as string) || '数值';
-
-  if (!chartData || typeof chartData !== 'object' || Array.isArray(chartData)) return null;
-
-  const entries = Object.entries(chartData).filter(([, v]) => v > 0);
-  if (entries.length === 0) return null;
-
-  if (type === 'pie') {
-    const pieData = entries.slice(0, 15);
-    return {
-      title: { text: title, left: 'center', textStyle: { fontSize: 14 } },
-      tooltip: { trigger: 'item' },
-      legend: { bottom: 0, type: 'scroll' },
-      series: [{
-        type: 'pie',
-        radius: ['35%', '65%'],
-        data: pieData.map(([name, value]) => ({ name, value })),
-        label: { formatter: '{b}: {c}' },
-      }],
-    };
-  }
-
-  if (type === 'bar' || type === 'line') {
-    const chartEntries = entries.slice(0, 30);
-    return {
-      title: { text: title, left: 'center', textStyle: { fontSize: 14 } },
-      tooltip: {
-        trigger: 'axis',
-        formatter: (params: Array<{ name: string; value: number }>) => {
-          const p = params[0];
-          return `${p.name}<br/>${yLabel}: ${p.value}`;
-        },
-      },
-      xAxis: {
-        type: 'category',
-        data: chartEntries.map(([name]) => name),
-        axisLabel: { rotate: 45, fontSize: 10, interval: 0 },
-      },
-      yAxis: { type: 'value', name: yLabel },
-      series: [{
-        type: type === 'line' ? 'line' : 'bar',
-        data: chartEntries.map(([, value]) => value),
-        itemStyle: type === 'line' ? undefined : {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: '#3b82f6' },
-            { offset: 1, color: '#93c5fd' },
-          ]),
-        },
-        smooth: type === 'line',
-      }],
-      grid: { bottom: 100, left: 60, right: 20 },
-      dataZoom: entries.length > 15 ? [{
-        type: 'slider',
-        start: 0,
-        end: Math.min(100, (15 / entries.length) * 100),
-        bottom: 10,
-      }] : undefined,
-    };
-  }
-
-  return null;
+function EmptyState() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardContent className="flex flex-col items-center gap-3 pt-6">
+          <div className="flex h-24 w-full items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/25">
+            <p className="text-muted-foreground text-sm">
+              图表和分析结果将在这里展示
+            </p>
+          </div>
+          <p className="text-muted-foreground text-xs text-center">
+            在左侧对话面板中提出问题后，可视化结果将在此处渲染显示
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
-function categoryLabel(key: string): string {
-  const map: Record<string, string> = {
-    script: '话术',
-    kpi: 'KPI指标',
-    case: '成功案例',
-    training: '培训材料',
+function DataTable({ records, columns }: { records: Record<string, unknown>[]; columns: string[] }) {
+  const COLUMN_LABELS: Record<string, string> = {
+    name: '姓名',
+    department: '部门',
+    month: '月份',
+    wechat_added: '加微',
+    interaction: '互动',
+    demand: '需求',
+    deal: '成交',
   };
-  return map[key] || key;
-}
 
-type SalesRow = {
-  name: string;
-  department: string;
-  month: string;
-  wechat_added: number;
-  interaction: number;
-  demand: number;
-  deal: number;
-};
-
-type SopRow = {
-  title: string;
-  category: string;
-  tags: string;
-};
-
-const PAGE_SIZE = 20;
-
-function PaginatedSalesTable({ rows }: { rows: SalesRow[] }) {
   const [page, setPage] = useState(1);
-  const totalPages = Math.ceil(rows.length / PAGE_SIZE);
-  const paged = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageSize = 20;
+  const totalPages = Math.ceil(records.length / pageSize);
+  const paged = records.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div className="flex flex-col h-full">
@@ -166,27 +74,30 @@ function PaginatedSalesTable({ rows }: { rows: SalesRow[] }) {
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-background">
             <tr className="border-b text-left text-muted-foreground">
-              <th className="pb-2 pr-3">姓名</th>
-              <th className="pb-2 pr-3">部门</th>
-              <th className="pb-2 pr-3">月份</th>
-              <th className="pb-2 pr-3 text-right">加微</th>
-              <th className="pb-2 pr-3 text-right">互动</th>
-              <th className="pb-2 pr-3 text-right">需求</th>
-              <th className="pb-2 text-right">成交</th>
+              {columns.map(col => (
+                <th key={col} className="pb-2 pr-3 text-xs font-medium">
+                  {COLUMN_LABELS[col] || col}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {paged.map((row, i) => (
               <tr key={i} className="border-b last:border-0">
-                <td className="py-1.5 pr-3 font-medium">{row.name}</td>
-                <td className="py-1.5 pr-3">
-                  <Badge variant="secondary" className="text-xs">{row.department}</Badge>
-                </td>
-                <td className="py-1.5 pr-3">{row.month}</td>
-                <td className="py-1.5 pr-3 text-right">{row.wechat_added}</td>
-                <td className="py-1.5 pr-3 text-right">{row.interaction}</td>
-                <td className="py-1.5 pr-3 text-right">{row.demand}</td>
-                <td className="py-1.5 text-right font-semibold text-blue-600">{row.deal}</td>
+                {columns.map(col => {
+                  const val = row[col];
+                  return (
+                    <td key={col} className="py-1.5 pr-3">
+                      {col === 'department' ? (
+                        <Badge variant="secondary" className="text-xs">{String(val ?? '')}</Badge>
+                      ) : col === 'deal' ? (
+                        <span className="font-semibold text-blue-600">{String(val ?? 0)}</span>
+                      ) : (
+                        <span>{String(val ?? '')}</span>
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -195,7 +106,7 @@ function PaginatedSalesTable({ rows }: { rows: SalesRow[] }) {
       {totalPages > 1 && (
         <div className="flex items-center justify-between border-t pt-2 mt-2">
           <span className="text-xs text-muted-foreground">
-            共 {rows.length} 条，第 {page}/{totalPages} 页
+            共 {records.length} 条，第 {page}/{totalPages} 页
           </span>
           <div className="flex gap-1">
             <Button
@@ -223,136 +134,85 @@ function PaginatedSalesTable({ rows }: { rows: SalesRow[] }) {
   );
 }
 
-function renderTable(data: Record<string, unknown>) {
-  // Try sales performance rows first
-  const salesRows = data.rows as Array<SalesRow> | undefined;
-  if (salesRows && salesRows.length > 0 && 'name' in salesRows[0]) {
-    return <PaginatedSalesTable rows={salesRows} />;
-  }
-
-  // Fallback: SOP-style rows
-  const sopRows = data.rows as Array<SopRow> | undefined;
-  if (!sopRows || sopRows.length === 0) return null;
-
+function SandboxRenderer({ html }: { html: string }) {
   return (
-    <div className="overflow-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="pb-2 pr-4">标题</th>
-            <th className="pb-2 pr-4">类型</th>
-            <th className="pb-2">标签</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sopRows.map((row, i) => (
-            <tr key={i} className="border-b last:border-0">
-              <td className="py-2 pr-4 font-medium">{row.title}</td>
-              <td className="py-2 pr-4">
-                <Badge variant="secondary">{categoryLabel(row.category)}</Badge>
-              </td>
-              <td className="py-2 text-muted-foreground text-xs">{row.tags}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <iframe
+      sandbox="allow-scripts allow-same-origin"
+      srcDoc={html}
+      style={{ width: '100%', height: '100%', border: 'none', borderRadius: '8px' }}
+      title="Chart Visualization"
+    />
   );
 }
 
-export function RenderArea({ schema, isLoading, visualization }: RenderAreaProps) {
-  // Priority: Sandpack visualization > legacy UISchema
-  if (visualization?.code) {
-    return (
-      <div className="flex h-full flex-col overflow-hidden p-4">
-        <div className="mb-3">
-          <h3 className="text-base font-semibold">{visualization.title}</h3>
-          {visualization.description && (
-            <p className="text-muted-foreground text-sm mt-1">{visualization.description}</p>
-          )}
-        </div>
-        <SandpackRenderer code={visualization.code} dependencies={visualization.dependencies} />
-      </div>
-    );
+export function RenderArea({ message, isLoading }: RenderAreaProps) {
+  const [view, setView] = useState<'chart' | 'table'>('chart');
+  const hasData = message && (message.records?.length ?? 0) > 0;
+  const hasChart = !!message?.chartHtml;
+  const isActive = message?.phase === 'done' || hasData;
+
+  // Show loading if global loading and no active message, or if message is still loading
+  if ((isLoading && !hasData) || (message?.phase && message.phase !== 'done' && message.phase !== 'error' && !hasData)) {
+    return <LoadingIndicator phase={message?.phase} />;
   }
 
-  if (!schema) {
-    if (isLoading) {
-      return (
-        <div className="flex h-full flex-col items-center justify-center p-4">
-          <Card className="w-full max-w-md">
-            <CardContent className="flex flex-col items-center gap-3 pt-6">
-              <div className="flex h-24 w-full items-center justify-center rounded-lg border-2 border-dashed border-blue-300 bg-blue-50/50">
-                <div className="flex flex-col items-center gap-2">
-                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-                  <p className="text-blue-600 text-sm">
-                    AI 正在分析数据...
-                  </p>
-                </div>
-              </div>
-              <p className="text-muted-foreground text-xs text-center">
-                分析完成后，可视化结果将在此处显示
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex h-full flex-col items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="flex flex-col items-center gap-3 pt-6">
-            <div className="flex h-24 w-full items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/25">
-              <p className="text-muted-foreground text-sm">
-                图表和分析结果将在这里展示
-              </p>
-            </div>
-            <p className="text-muted-foreground text-xs text-center">
-              在左侧对话面板中提出问题后，可视化结果将在此处渲染显示
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
+  if (!isActive) {
+    if (isLoading) return <LoadingIndicator phase={message?.phase} />;
+    return <EmptyState />;
   }
-
-  const isTable = schema.type === 'table';
-  const isChart = ['bar', 'pie', 'line', 'radar'].includes(schema.type);
-  const chartOption = isChart ? buildEChartsOption(schema) ?? null : null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden p-4">
-      {/* Title */}
-      <div className="mb-3">
-        <h3 className="text-base font-semibold">{schema.title}</h3>
-        {schema.summary && (
-          <p className="text-muted-foreground text-sm mt-1">{schema.summary}</p>
-        )}
-      </div>
+      {/* Tab switcher */}
+      {hasData && hasChart && (
+        <div className="flex items-center gap-2 mb-3">
+          <Button
+            variant={view === 'chart' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setView('chart')}
+          >
+            图表
+          </Button>
+          <Button
+            variant={view === 'table' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setView('table')}
+          >
+            数据表
+          </Button>
+          {message.sql && (
+            <span className="ml-auto text-xs text-muted-foreground font-mono truncate max-w-[200px]" title={message.sql}>
+              SQL: {message.sql.slice(0, 50)}...
+            </span>
+          )}
+        </div>
+      )}
 
-      {/* Chart or Table */}
-      {chartOption && !isTable && (
+      {/* Chart view */}
+      {view === 'chart' && hasChart && (
         <Card className="flex-1 min-h-[300px]">
           <CardContent className="h-full p-3">
-            <ReactEChartsCore
-              echarts={echarts}
-              option={chartOption}
-              style={{ height: '100%', width: '100%' }}
-              notMerge
-            />
+            <SandboxRenderer html={message.chartHtml!} />
           </CardContent>
         </Card>
       )}
 
-      {isTable && schema.data && (
+      {/* Table view */}
+      {(view === 'table' || !hasChart) && hasData && message.records && message.columns && (
         <Card className="flex-1 min-h-[300px] overflow-auto">
           <CardContent className="p-4">
-            {renderTable(schema.data)}
+            <DataTable records={message.records} columns={message.columns} />
           </CardContent>
         </Card>
       )}
 
+      {/* Loading chart while data is available */}
+      {isLoading && hasData && !hasChart && message?.phase === 'generating_chart' && (
+        <div className="flex items-center gap-2 py-4 text-muted-foreground">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+          <span className="text-sm">正在生成图表...</span>
+        </div>
+      )}
     </div>
   );
 }

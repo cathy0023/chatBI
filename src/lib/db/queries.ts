@@ -76,7 +76,7 @@ export function getMessagesBySession(sessionId: string): ChatMessage[] {
   return db.prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC').all(sessionId) as ChatMessage[];
 }
 
-export function getAllSessions(): Array<ChatSession & { message_count: number }> {
+export function getAllSessions(limit: number = 20): Array<ChatSession & { message_count: number }> {
   const db = getDb();
   return db.prepare(`
     SELECT s.*, COUNT(m.id) as message_count
@@ -84,8 +84,30 @@ export function getAllSessions(): Array<ChatSession & { message_count: number }>
     LEFT JOIN chat_messages m ON s.id = m.session_id
     GROUP BY s.id
     ORDER BY s.created_at DESC
-    LIMIT 50
-  `).all() as Array<ChatSession & { message_count: number }>;
+    LIMIT ?
+  `).all(limit) as Array<ChatSession & { message_count: number }>;
+}
+
+export function cleanupOldSessions(keepCount: number = 20): number {
+  const db = getDb();
+  const ids = db.prepare(
+    'SELECT id FROM chat_sessions ORDER BY created_at DESC LIMIT -1 OFFSET ?'
+  ).all(keepCount) as Array<{ id: string }>;
+
+  if (ids.length === 0) return 0;
+
+  const deleteMessages = db.prepare('DELETE FROM chat_messages WHERE session_id = ?');
+  const deleteSession = db.prepare('DELETE FROM chat_sessions WHERE id = ?');
+
+  const cleanup = db.transaction(() => {
+    for (const { id } of ids) {
+      deleteMessages.run(id);
+      deleteSession.run(id);
+    }
+    return ids.length;
+  });
+
+  return cleanup();
 }
 
 export function deleteSession(id: string): void {
@@ -96,5 +118,10 @@ export function deleteSession(id: string): void {
 
 export function updateSessionTitle(id: string, title: string): void {
   const db = getDb();
+  // Reject corrupted titles (containing Unicode replacement characters)
+  if (title.includes('\uFFFD')) {
+    console.warn('[DB] Rejecting corrupted title for session', id, ':', title);
+    return;
+  }
   db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ?').run(title, id);
 }

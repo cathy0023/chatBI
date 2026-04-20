@@ -75,99 +75,59 @@ vi.mock('@/lib/db/connection', () => ({
 // 2. Mock LLM provider — no real API calls
 // Use vi.hoisted so the mock is available when vi.mock factory runs
 const { mockGenerateObject, mockGenerateText } = vi.hoisted(() => {
-  const mockGenObj = vi.fn().mockImplementation((opts: { prompt?: string }) => {
+  // generateTextCompat mock: handles both Router prompts and NL2SQL prompts
+  const mockGenText = vi.fn().mockImplementation((opts: { prompt?: string }) => {
     const prompt = opts.prompt || '';
-    // QueryAgent prompt contains "查询参数提取器"
-    if (prompt.includes('查询参数提取器')) {
-      let name: string | null = null;
-      let department: string | null = null;
-      let month: string | null = null;
-      let metric: string | null = null;
-      let metricMinValue: number | null = null;
-      let isRanking = false;
-      let isSummary = false;
 
-      if (prompt.includes('武莹')) name = '武莹';
-      if (prompt.includes('李明')) name = '李明';
-      if (prompt.includes('花园桥')) department = '花园桥校区';
-      if (prompt.includes('中关村')) department = '中关村校区';
-      if (prompt.includes('10月')) month = '10月';
-      if (prompt.includes('9月')) month = '9月';
-      if (prompt.includes('排行榜') || prompt.includes('排名')) isRanking = true;
-      if (prompt.includes('汇总') || prompt.includes('各部门')) isSummary = true;
-      if (prompt.includes('有没有成交') || prompt.includes('有成交')) {
-        metric = 'deal';
-        metricMinValue = 1;
+    // NL2SQL prompt contains "SQL 生成引擎"
+    if (prompt.includes('SQL') || prompt.includes('sales_performance')) {
+      if (prompt.includes('武莹')) {
+        return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE name = '武莹' ORDER BY month" });
       }
-
-      return Promise.resolve({
-        object: { name, department, month, metric, metricMinValue, isRanking, isSummary },
-      });
-    }
-
-    // AnalysisAgent prompt contains "销售数据分析专家"
-    if (prompt.includes('销售数据分析专家')) {
-      return Promise.resolve({
-        object: {
-          summary: '销售数据概览',
-          insights: ['趋势良好', '成交稳步增长'],
-          dataSummary: { totalCount: 8, totalDeal: 29 },
-          suggestedChartType: 'bar',
-        },
-      });
-    }
-
-    // ResponseGenerator prompt contains "销售数据助手"
-    if (prompt.includes('销售数据助手')) {
-      return Promise.resolve({
-        object: {
-          text: `根据查询结果，为您找到相关销售数据。成交情况整体表现良好。`,
-          uiType: 'table',
-        },
-      });
-    }
-
-    // QueryAgent uses generateText → prompt contains "查询参数提取器"
-    if (prompt.includes('查询参数提取器')) {
-      // Return simple JSON text (no markdown) for manual parsing
-      let name = null, department = null, month = null, metric = null, metricMinValue = null;
-      let isRanking = false, isSummary = false;
-
-      if (prompt.includes('武莹')) name = '武莹';
-      if (prompt.includes('李明')) name = '李明';
-      if (prompt.includes('花园桥')) department = '花园桥校区';
-      if (prompt.includes('中关村')) department = '中关村校区';
-      if (prompt.includes('10月')) month = '10月';
-      if (prompt.includes('9月')) month = '9月';
-      if (prompt.includes('排行榜') || prompt.includes('排名')) isRanking = true;
-      if (prompt.includes('汇总') || prompt.includes('各部门')) isSummary = true;
-      if (prompt.includes('有没有成交') || prompt.includes('有成交')) {
-        metric = 'deal';
-        metricMinValue = 1;
+      if (prompt.includes('花园桥')) {
+        return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE department LIKE '%花园桥%' ORDER BY month" });
       }
-
-      const obj = { name, department, month, metric, metricMinValue, isRanking, isSummary };
-      return Promise.resolve({ text: JSON.stringify(obj) });
+      if (prompt.includes('李明')) {
+        return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE name = '李明' ORDER BY month" });
+      }
+      if (prompt.includes('10月')) {
+        return Promise.resolve({ text: "SELECT * FROM sales_performance WHERE month = '10月' ORDER BY name" });
+      }
+      if (prompt.includes('排行榜') || prompt.includes('排名')) {
+        return Promise.resolve({ text: 'SELECT * FROM sales_performance ORDER BY deal DESC LIMIT 10' });
+      }
+      // Fallback SQL for unknown queries
+      return Promise.resolve({ text: 'SELECT * FROM sales_performance ORDER BY month, name LIMIT 1000' });
     }
 
-    // Default: Router agent response (now uses generateText → return text)
+    // Router prompt contains "意图分类器"
+    if (prompt.includes('意图分类器')) {
+      if (prompt.includes('分析') || prompt.includes('排行') || prompt.includes('对比')) {
+        return Promise.resolve({
+          text: JSON.stringify({ intent: 'analysis', confidence: 0.9, agents: ['query', 'analysis'], params: {} }),
+        });
+      }
+      return Promise.resolve({
+        text: JSON.stringify({ intent: 'query', confidence: 0.8, agents: ['query'], params: {} }),
+      });
+    }
+
+    // Default
     return Promise.resolve({
-      text: JSON.stringify({
-        intent: 'query',
-        confidence: 0.7,
-        agents: ['query'],
-        params: {},
-      }),
+      text: JSON.stringify({ intent: 'query', confidence: 0.7, agents: ['query'], params: {} }),
     });
   });
 
-  const mockGenText = vi.fn().mockResolvedValue({
-    text: JSON.stringify({
+  // generateObject mock: used by UnifiedAnalysisResponse
+  const mockGenObj = vi.fn().mockResolvedValue({
+    object: {
+      text: '根据查询结果，为您找到相关销售数据。成交情况整体表现良好。',
+      uiType: 'table' as const,
       summary: '销售数据概览',
       insights: ['趋势良好', '成交稳步增长'],
       dataSummary: { totalCount: 8, totalDeal: 29 },
-      suggestedChartType: 'bar',
-    }),
+      suggestedChartType: 'bar' as const,
+    },
   });
 
   return { mockGenerateObject: mockGenObj, mockGenerateText: mockGenText };
@@ -176,12 +136,23 @@ const { mockGenerateObject, mockGenerateText } = vi.hoisted(() => {
 vi.mock('ai', () => ({
   generateObject: mockGenerateObject,
   generateText: mockGenerateText,
+  streamText: vi.fn(),
+  tool: vi.fn(),
 }));
 
 vi.mock('@/lib/llm/provider', () => ({
   openai: {},
   DEFAULT_MODEL: 'test-model',
   getDefaultModel: () => 'test-model',
+  generateTextCompat: (...args: unknown[]) => mockGenerateText(...args),
+}));
+
+vi.mock('@/lib/chat/tools/generate-visualization', () => ({
+  generateVisualization: {},
+}));
+
+vi.mock('@/lib/chat/prompts/data-analyst', () => ({
+  buildDataAnalystPrompt: () => 'mock-prompt',
 }));
 
 // Import AFTER mocks

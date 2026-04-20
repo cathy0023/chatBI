@@ -12,73 +12,64 @@ export default function Home() {
   const chat = useChat();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [isManualSelection, setIsManualSelection] = useState(false);
 
-  // Get the selected message's data, or fall back to latest assistant data
-  const { activeSchema, activeVisualization } = (() => {
-    const findMessageData = (msgId: string | null) => {
-      if (msgId) {
-        const selected = chat.messages.find(m => m.id === msgId);
-        if (selected) {
-          return {
-            schema: selected.uiSchema ?? null,
-            vis: selected.visualization,
-          };
-        }
+  // Get the active message for the render area
+  const activeMessage = (() => {
+    // Manual selection takes priority
+    if (selectedMessageId) {
+      const selected = chat.messages.find(m => m.id === selectedMessageId);
+      if (selected && selected.role === 'assistant' && (selected.records || selected.chartHtml)) {
+        return selected;
       }
-      // Default: show latest assistant message's data
-      const last = [...chat.messages].reverse().find(
-        m => m.role === 'assistant' && (m.uiSchema || m.visualization)
-      );
-      if (last) {
-        return {
-          schema: last.uiSchema ?? null,
-          vis: last.visualization,
-        };
-      }
-      return { schema: null, vis: undefined };
-    };
-    return {
-      activeSchema: findMessageData(selectedMessageId).schema,
-      activeVisualization: findMessageData(selectedMessageId).vis,
-    };
+    }
+    // Default: latest assistant message with data
+    const last = [...chat.messages].reverse().find(
+      m => m.role === 'assistant' && (m.records || m.chartHtml),
+    );
+    return last || null;
   })();
 
-  // Update selectedMessageId when new messages arrive
+  // Auto-follow latest message when not manually selected
   useEffect(() => {
-    if (!selectedMessageId) {
-      const lastAssistantWithData = [...chat.messages].reverse().find(
-        m => m.role === 'assistant' && (m.uiSchema || m.visualization)
+    if (!isManualSelection) {
+      const lastWithData = [...chat.messages].reverse().find(
+        m => m.role === 'assistant' && (m.records || m.chartHtml),
       );
-      if (lastAssistantWithData) {
-        setSelectedMessageId(lastAssistantWithData.id);
+      if (lastWithData) {
+        setSelectedMessageId(lastWithData.id);
       }
     }
-  }, [chat.messages, selectedMessageId]);
+  }, [chat.messages, isManualSelection]);
 
-  // Expose setSelectedMessageId via chat panel callback
   const handleSelectMessage = useCallback((msg: ChatMessage) => {
-    if (msg.uiSchema || msg.visualization) {
-      setSelectedMessageId(prev => prev === msg.id ? null : msg.id);
-    }
-  }, []);
+    const isDeselecting = selectedMessageId === msg.id;
+    setSelectedMessageId(isDeselecting ? null : msg.id);
+    setIsManualSelection(!isDeselecting);
+  }, [selectedMessageId]);
 
-  // Load messages from a historical session
+  const handleSendMessage = useCallback((content: string) => {
+    setIsManualSelection(false);
+    setSelectedMessageId(null);
+    chat.sendMessage(content);
+  }, [chat]);
+
   const loadSession = useCallback(async (sessionId: string) => {
     setSelectedMessageId(null);
+    setIsManualSelection(false);
     await chat.loadSessionMessages(sessionId);
   }, [chat]);
 
   const handleNewSession = useCallback(() => {
     setSelectedMessageId(null);
+    setIsManualSelection(false);
     chat.clearMessages();
   }, [chat]);
 
   // Toggle sidebar on mobile
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 768) {
-        setSidebarOpen(false);
-      }
+      if (window.innerWidth < 768) setSidebarOpen(false);
     };
     handleResize();
     window.addEventListener('resize', handleResize);
@@ -123,17 +114,18 @@ export default function Home() {
               messages={chat.messages}
               isLoading={chat.isLoading}
               error={chat.error}
-              sendMessage={chat.sendMessage}
+              sendMessage={handleSendMessage}
               clearMessages={handleNewSession}
+              selectedMessageId={selectedMessageId}
+              onSelectMessage={handleSelectMessage}
             />
           </div>
 
           {/* Dynamic Rendering Area - 40% */}
-          <div className="hidden md:flex h-full flex-col overflow-hidden">
+          <div data-testid="render-area" className="hidden md:flex h-full flex-col overflow-hidden">
             <RenderArea
-              schema={activeSchema as Parameters<typeof RenderArea>[0]['schema']}
+              message={activeMessage}
               isLoading={chat.isLoading}
-              visualization={activeVisualization}
             />
           </div>
         </div>

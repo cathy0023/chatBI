@@ -129,3 +129,16 @@
     @apply font-sans;
   }
 }
+
+@keyframes streaming-gradient {
+  0% { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
+  25% { border-color: #8b5cf6; box-shadow: 0 0 0 1px #8b5cf6; }
+  50% { border-color: #06b6d4; box-shadow: 0 0 0 1px #06b6d4; }
+  75% { border-color: #8b5cf6; box-shadow: 0 0 0 1px #8b5cf6; }
+  100% { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; }
+}
+
+.streaming-border {
+  border: 1.5px solid #3b82f6;
+  animation: streaming-gradient 2s linear infinite;
+}

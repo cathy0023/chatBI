@@ -1,15 +1,15 @@
 import { NextRequest } from 'next/server';
-import { streamText, stepCountIs } from 'ai';
 import { ensureSession, persistMessage } from '@/lib/chat/session';
-import { handleMessage } from '@/lib/chat/message-handler';
-import { generateVisualization } from '@/lib/chat/tools/generate-visualization';
-import { buildDataAnalystPrompt } from '@/lib/chat/prompts/data-analyst';
-import { QueryAgent } from '@/lib/agents/query-agent';
-import { getDefaultModel } from '@/lib/llm/provider';
+import { createSSEStream } from '@/lib/chat/sse-helper';
+import { NL2SQLEngine } from '@/lib/semantic/nl2sql';
+import { getDb } from '@/lib/db/connection';
+import { generateTextCompat } from '@/lib/llm/provider';
+import { generateChartCode } from '@/lib/chart/code-generator';
+import { getSession, updateSessionTitle } from '@/lib/db/queries';
 
-const queryAgent = new QueryAgent();
+const GREETING_PATTERN = /^(你好|hi|hello|嗨|hey|哈喽|早上好|下午好|晚上好|您好)\s*[!.?？。！]?\s*$/i;
 
-const GREETING_PATTERNS = /^(你好|您好|嗨|hi|hello|hey|哈喽|早上好|下午好|晚上好)[\s!！。.]*$/i;
+const GREETING_RESPONSE = '你好！我是 ChatBI 销售数据分析助手。你可以问我关于销售业绩的问题，比如：\n\n- **9月成交top5的销售**\n- **各部门成交汇总**\n- **每月成交趋势**\n\n试试看吧！';
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,157 +23,88 @@ export async function POST(request: NextRequest) {
     const sid = ensureSession(sessionId);
     persistMessage(sid, 'user', message);
 
-    // Greeting fast-path: skip queryAgent, go directly to legacy handler
-    if (GREETING_PATTERNS.test(message.trim())) {
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          const send = (event: string, data: unknown) => {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          };
+    return createSSEStream(async (send) => {
+      send('session', { sessionId: sid });
 
-          send('session', { sessionId: sid });
-
-          try {
-            const legacyResult = await handleMessage(message, sid);
-            send('text', { text: legacyResult.text });
-            if (legacyResult.uiSchema) {
-              send('uiSchema', { uiSchema: legacyResult.uiSchema });
-            }
-            persistMessage(
-              sid,
-              'assistant',
-              legacyResult.text,
-              legacyResult.uiSchema ? JSON.stringify(legacyResult.uiSchema) : undefined,
-              legacyResult.agentTrace ? JSON.stringify(legacyResult.agentTrace) : undefined,
-            );
-            send('done', {});
-          } catch (err) {
-            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-            send('error', { error: errorMsg });
-          }
-
-          controller.close();
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      });
-    }
-
-    // Try to get data first for the new streaming path
-    let queryResult: Awaited<ReturnType<typeof queryAgent.execute>> | null = null;
-    try {
-      queryResult = await queryAgent.execute({ query: message, searchType: 'sales' });
-    } catch (e) {
-      // If query fails, fall through to legacy handler
-      console.error('[ChatAPI] queryAgent error:', e);
-    }
-
-    // New path: data found → streamText with generateVisualization tool, wrapped in SSE
-    if (queryResult && queryResult.records.length > 0) {
-      const systemPrompt = buildDataAnalystPrompt(message, queryResult.records);
-
-      const streamResult = streamText({
-        model: getDefaultModel(),
-        system: systemPrompt,
-        messages: [{ role: 'user', content: message }],
-        tools: { generateVisualization },
-        stopWhen: stepCountIs(2),
-      });
-
-      const encoder = new TextEncoder();
-      const sseStream = new ReadableStream({
-        async start(controller) {
-          const send = (event: string, data: unknown) => {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          };
-
-          send('session', { sessionId: sid });
-          send('debug', { records: queryResult!.records.length, promptLen: systemPrompt.length });
-
-          try {
-            let fullText = '';
-            for await (const chunk of streamResult.textStream) {
-              fullText += chunk;
-              send('text', { text: fullText });
-            }
-
-            // Extract visualization from tool results
-            const toolResults = await streamResult.toolResults;
-            for (const tr of toolResults) {
-              if (tr.type === 'tool-result') {
-                const output = (tr as { type: string; output: unknown }).output as Record<string, unknown> | undefined;
-                if (output?.type === 'visualization') {
-                  send('visualization', output);
-                }
-              }
-            }
-
-            persistMessage(sid, 'assistant', fullText, toolResults.length > 0 ? JSON.stringify(toolResults) : undefined);
-            send('done', {});
-          } catch (err) {
-            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-            send('error', { error: errorMsg });
-          }
-
-          controller.close();
-        },
-      });
-
-      return new Response(sseStream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      });
-    }
-
-    // Legacy fallback: no data or query error → old SSE handler
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      async start(controller) {
-        const send = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        };
-
-        send('session', { sessionId: sid });
-
+      // Auto-generate session title from first user message
+      if (!GREETING_PATTERN.test(message.trim())) {
         try {
-          const legacyResult = await handleMessage(message, sid);
-          send('text', { text: legacyResult.text });
-          if (legacyResult.uiSchema) {
-            send('uiSchema', { uiSchema: legacyResult.uiSchema });
+          const session = getSession(sid);
+          if (!session?.title) {
+            const title = message.length > 30 ? message.slice(0, 30) + '…' : message;
+            updateSessionTitle(sid, title);
           }
-          persistMessage(
-            sid,
-            'assistant',
-            legacyResult.text,
-            legacyResult.uiSchema ? JSON.stringify(legacyResult.uiSchema) : undefined,
-            legacyResult.agentTrace ? JSON.stringify(legacyResult.agentTrace) : undefined,
-          );
-          send('done', {});
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-          send('error', { error: errorMsg });
+        } catch { /* non-critical */ }
+      }
+
+      // Greeting fast-path
+      if (GREETING_PATTERN.test(message.trim())) {
+        send('text', { text: GREETING_RESPONSE });
+        persistMessage(sid, 'assistant', GREETING_RESPONSE);
+        send('done', {});
+        return;
+      }
+
+      // === Single Pipeline ===
+
+      // Phase 1: Generate SQL
+      send('status', { phase: 'generating_sql' });
+      const db = getDb();
+      const engine = new NL2SQLEngine(db);
+      const result = await engine.query(message);
+
+      // No results
+      if (result.records.length === 0) {
+        send('text', { text: '抱歉，没有找到相关的销售数据。请尝试换个关键词，例如部门名称、人员姓名或月份。' });
+        persistMessage(sid, 'assistant', '抱歉，没有找到相关的销售数据。');
+        send('done', {});
+        return;
+      }
+
+      // Phase 2: Send data
+      send('status', { phase: 'executing' });
+      send('data', {
+        sql: result.sql,
+        records: result.records,
+        columns: result.columns,
+      });
+
+      // Phase 3: Generate analysis text
+      send('status', { phase: 'analyzing' });
+      let analysisText = '';
+      try {
+        const analysisResult = await generateTextCompat({
+          prompt: `你是销售数据分析助手。根据数据回答用户问题，简洁清晰，不超过200字。
+
+用户问题: ${message}
+数据（最多30条）: ${JSON.stringify(result.records.slice(0, 30))}
+
+直接回答问题，提取关键指标和趋势。`,
+        });
+        analysisText = analysisResult.text;
+      } catch {
+        analysisText = '';
+      }
+      // Ensure non-empty analysis text
+      if (!analysisText || analysisText.trim().length === 0) {
+        analysisText = `查询到 ${result.records.length} 条数据。`;
+      }
+      send('text', { text: analysisText });
+
+      // Phase 4: Generate chart
+      send('status', { phase: 'generating_chart' });
+      try {
+        const chartHtml = await generateChartCode(message, result.records, result.columns);
+        if (chartHtml) {
+          send('chart', { html: chartHtml });
         }
+      } catch (err) {
+        console.error('[Chat] Chart generation failed:', err);
+      }
 
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
+      // Done
+      persistMessage(sid, 'assistant', analysisText);
+      send('done', {});
     });
   } catch (error) {
     console.error('Chat API error:', error);
