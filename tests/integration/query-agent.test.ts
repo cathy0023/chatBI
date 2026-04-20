@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { QueryAgent } from '@/lib/agents/query-agent';
 
 // Mock the DB connection module to use an isolated test DB
-// We need to set up the mock BEFORE importing anything that transitively imports getDb
 const mockGetDb = vi.hoisted(() => {
   let _db: unknown = null;
   return {
@@ -14,6 +13,16 @@ const mockGetDb = vi.hoisted(() => {
 vi.mock('@/lib/db/connection', () => ({
   getDb: () => mockGetDb.getDb(),
   closeDb: () => {},
+}));
+
+// Mock the LLM (NL2SQL engine calls generateText)
+const mockGenerateText = vi.hoisted(() => vi.fn());
+vi.mock('ai', () => ({
+  generateText: (...args: unknown[]) => mockGenerateText(...args),
+}));
+vi.mock('@/lib/llm/provider', () => ({
+  getDefaultModel: () => 'mock-model',
+  generateTextCompat: (...args: unknown[]) => mockGenerateText(...args),
 }));
 
 import Database from 'better-sqlite3';
@@ -75,8 +84,15 @@ describe('Query Agent - Sales Search', () => {
     queryAgent = new QueryAgent();
   });
 
+  beforeEach(() => {
+    mockGenerateText.mockReset();
+  });
+
   describe('Search by name', () => {
     it('should find records by full name', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE name = '武莹' ORDER BY month",
+      });
       const result = await queryAgent.execute({ query: '武莹', searchType: 'sales' });
       expect(result.totalCount).toBe(4);
       expect(result.records[0].name).toBe('武莹');
@@ -85,14 +101,21 @@ describe('Query Agent - Sales Search', () => {
     });
 
     it('should return empty for unknown name', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE name = '不存在的员工'",
+      });
       const result = await queryAgent.execute({ query: '不存在的员工', searchType: 'sales' });
       expect(result.totalCount).toBe(0);
-      expect(result.confidence).toBe(0);
+      // NL2SQL engine returns 0.9 for successful generation regardless of result count
+      expect(result.confidence).toBe(0.9);
     });
   });
 
   describe('Search by department', () => {
     it('should find records by department short name', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE department LIKE '%花园桥%' ORDER BY month",
+      });
       const result = await queryAgent.execute({ query: '花园桥', searchType: 'sales' });
       expect(result.totalCount).toBe(4);
       result.records.forEach(r => expect(r.department).toBe('花园桥校区'));
@@ -101,6 +124,9 @@ describe('Query Agent - Sales Search', () => {
 
   describe('Search by month', () => {
     it('should find records by month', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE month = '10月' ORDER BY name",
+      });
       const result = await queryAgent.execute({ query: '10月', searchType: 'sales' });
       expect(result.totalCount).toBe(3);
       result.records.forEach(r => expect(r.month).toBe('10月'));
@@ -109,9 +135,12 @@ describe('Query Agent - Sales Search', () => {
 
   describe('Ranking queries', () => {
     it('should return top performers for ranking keyword', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'SELECT * FROM sales_performance ORDER BY deal DESC LIMIT 10',
+      });
       const result = await queryAgent.execute({ query: '成交排行榜', searchType: 'sales' });
       expect(result.totalCount).toBeGreaterThan(0);
-      // 武莹 10月 (deal=6) should be first
+      // LLM generates SQL (mocked) → SELECT * ORDER BY deal DESC → max deal = 6
       expect(result.records[0].deal).toBe(6);
     });
   });
@@ -122,28 +151,52 @@ describe('Query Agent - Sales Search', () => {
     });
 
     it('should default searchType to sales', async () => {
-      // When searchType is omitted, it defaults to 'sales'
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE name = '武莹' ORDER BY month",
+      });
       const result = await queryAgent.execute({ query: '武莹' });
       expect(result.searchType).toBe('sales');
     });
   });
 
   describe('Confidence scoring', () => {
-    it('should follow formula: min(0.6 + count * 0.02, 0.95)', async () => {
+    it('should return 0.9 for successful generation', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE name = '武莹' ORDER BY month",
+      });
       const result = await queryAgent.execute({ query: '武莹', searchType: 'sales' });
-      // 4 records → 0.6 + 4 * 0.02 = 0.68
-      expect(result.confidence).toBeCloseTo(0.68, 1);
+      expect(result.confidence).toBe(0.9);
     });
 
-    it('should return 0 confidence for no results', async () => {
+    it('should return 0.9 even for no results (successful generation)', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: "SELECT * FROM sales_performance WHERE name = '不存在的员工'",
+      });
       const result = await queryAgent.execute({ query: '不存在的员工', searchType: 'sales' });
+      expect(result.confidence).toBe(0.9);
+    });
+
+    it('should return 0 for fallback (empty results)', async () => {
+      // Both generate and repair fail → empty fallback
+      mockGenerateText.mockResolvedValue({ text: "SELECT * FROM nonexistent" });
+      const result = await queryAgent.execute({ query: '无法理解的查询', searchType: 'sales' });
       expect(result.confidence).toBe(0);
     });
 
-    it('should cap confidence at 0.95', async () => {
-      // Even with many results, confidence should not exceed 0.95
-      const result = await queryAgent.execute({ query: '花园桥', searchType: 'sales' });
-      expect(result.confidence).toBeLessThanOrEqual(0.95);
+    it('should return fallback when LLM fails (no few-shot direct execution)', async () => {
+      // New pipeline: LLM failure → fallback (confidence 0, empty records)
+      // Few-shot examples are only reference in prompt, not directly executed
+      mockGenerateText.mockRejectedValue(new Error('LLM timeout'));
+      const result = await queryAgent.execute({ query: '成交排行榜', searchType: 'sales' });
+      expect(result.confidence).toBe(0);
+      expect(result.records).toHaveLength(0);
+    });
+
+    it('should return empty when LLM fails and no few-shot matches', async () => {
+      mockGenerateText.mockRejectedValue(new Error('LLM timeout'));
+      const result = await queryAgent.execute({ query: '无法理解的查询', searchType: 'sales' });
+      expect(result.confidence).toBe(0);
+      expect(result.totalCount).toBe(0);
     });
   });
 });
