@@ -42,9 +42,19 @@ export const FEW_SHOTS: FewShotExample[] = [
     sql: `SELECT SUM(deal) AS deal, SUM(wechat_added) AS wechat_added, SUM(interaction) AS interaction, SUM(demand) AS demand FROM sales_performance`,
   },
   {
+    patterns: ['情况', '成交情况', '销售情况', '数据'],
+    question: '10月份成交情况',
+    sql: `SELECT name, department, month, wechat_added, interaction, demand, deal FROM sales_performance WHERE month = '10月' ORDER BY deal DESC`,
+  },
+  {
     patterns: ['销售业绩', '业绩一览', '业绩总览'],
     question: '销售业绩一览',
     sql: `SELECT name, department, month, wechat_added, interaction, demand, deal FROM sales_performance ORDER BY deal DESC, month LIMIT 50`,
+  },
+  {
+    patterns: ['成交情况', '销售情况', '业绩情况', '数据情况'],
+    question: '10月份成交情况',
+    sql: `SELECT name, department, wechat_added, interaction, demand, deal FROM sales_performance WHERE month = '10月' ORDER BY deal DESC`,
   },
 ];
 

@@ -56,7 +56,9 @@ ${fewShotSection}
 3. 月份字段值必须是: 7月, 8月, 9月, 10月（参考值映射做转换）
 4. 多个月份用 IN，如 WHERE month IN ('7月','8月')
 5. 聚合时必须保留原始列名作为别名，如 SUM(deal) AS deal, SUM(wechat_added) AS wechat_added，禁止使用中文别名
-6. 只输出 SQL，不要输出任何其他内容，不要用 markdown 代码块包裹
+6. 除非用户明确要求“汇总/总计/合计/总共”，否则不要只返回单行聚合结果；应返回按 name 或 department 的明细/分组数据，支持后续分析 Top、低绩效、零成交
+7. 当问题包含“情况/表现/分析/排名”等语义时，优先返回 name, department, month, deal 等可分析字段
+8. 只输出 SQL，不要输出任何其他内容，不要用 markdown 代码块包裹
 
 用户问题: "${question}"`;
 }
