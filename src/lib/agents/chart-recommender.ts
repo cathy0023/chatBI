@@ -187,7 +187,8 @@ function aggregateBy(
 
   const agg: Record<string, number> = {};
   for (const r of records) {
-    const key = String(r[effectiveDimension] || 'unknown');
+    const rawKey = r[effectiveDimension];
+    const key = rawKey != null && String(rawKey).trim() !== '' ? String(rawKey) : '其他';
     const value = Number(r[metric] || 0);
     agg[key] = (agg[key] || 0) + value;
   }

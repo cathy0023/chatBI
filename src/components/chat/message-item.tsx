@@ -28,7 +28,7 @@ export function MessageItem({ message, hasData, onClick }: MessageItemProps) {
           {isUser ? 'U' : 'AI'}
         </AvatarFallback>
       </Avatar>
-      <Card className={`max-w-[80%] py-1 ${isUser ? 'bg-blue-600 text-white' : 'bg-muted'} ${isLoading ? 'ring-1 ring-blue-300' : ''}`}>
+      <Card className={`max-w-[80%] py-1 ${isUser ? 'bg-blue-600 text-white' : 'bg-muted'}`}>
         <CardContent className="px-3 py-1.5 text-sm">
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
