@@ -1,0 +1,64 @@
+import type { SSESender } from './sse-helper';
+
+// ==================== Tenant Context ====================
+
+export interface TenantContext {
+  tenantId: string;
+  name: string;
+  dbPath?: string;
+  skills?: string[];
+  systemPromptExtra?: string;
+  permissions: {
+    queryOwnDeptOnly: boolean;
+    allowedChartTypes: string[];
+  };
+}
+
+/** Default single-tenant context for MVP */
+export const DEFAULT_TENANT: TenantContext = {
+  tenantId: 'default',
+  name: 'ChatBI',
+  permissions: {
+    queryOwnDeptOnly: false,
+    allowedChartTypes: ['bar', 'line', 'pie', 'radar', 'scatter'],
+  },
+};
+
+// ==================== Request Context ====================
+
+export interface RequestContext {
+  sessionId: string;
+  tenant: TenantContext;
+  message: string;
+}
+
+// ==================== Tool Context ====================
+
+export interface ToolContext {
+  tenant: TenantContext;
+  sessionId: string;
+  send: SSESender;
+  /** Accumulated data from previous tool calls in this ReAct cycle */
+  data: Record<string, unknown>[];
+  columns: string[];
+  originalQuery: string;
+}
+
+// ==================== ReAct Result ====================
+
+export interface ReActResult {
+  text: string;
+  steps: Array<{
+    type: 'tool_call' | 'text' | 'tool_result';
+    toolName?: string;
+    content?: string;
+  }>;
+  toolResults: unknown[];
+}
+
+// ==================== Chat Message (for history) ====================
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
