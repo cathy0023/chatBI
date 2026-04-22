@@ -13,7 +13,8 @@ export function createAnalysisTool(ctx: ToolContext) {
   return tool({
     description: '分析销售数据，生成洞察和总结。用于趋势分析、排名对比、异常发现。',
     inputSchema: zodSchema(inputSchema),
-    execute: async ({ query }: { query: string; focus?: string }) => {
+    execute: async (params) => {
+      const { query } = params;
       const data = ctx.data;
 
       if (data.length === 0) {

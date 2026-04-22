@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateText, stepCountIs } from 'ai';
 import { getDefaultModel } from '@/lib/llm/provider';
 import { buildSystemPrompt } from './prompts/system-prompt';
 import { createQueryTool } from './tools/query-tool';
@@ -29,7 +29,7 @@ export async function executeReActLoop(
     system: systemPrompt,
     messages,
     tools,
-    maxSteps: 5,
+    stopWhen: stepCountIs(5),
     onStepFinish: async (step) => {
       ctx.send('step', {
         type: step.toolCalls && step.toolCalls.length > 0 ? 'tool_call' : 'text',

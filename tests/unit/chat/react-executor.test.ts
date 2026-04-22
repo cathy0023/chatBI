@@ -80,7 +80,7 @@ describe('executeReActLoop', () => {
     expect(result.steps[0].type).toBe('text');
   });
 
-  it('passes tools and maxSteps=5 to generateText', async () => {
+  it('passes tools and stopWhen to generateText', async () => {
     mockGenerateText.mockResolvedValue({
       text: 'ok',
       steps: [],
@@ -91,7 +91,7 @@ describe('executeReActLoop', () => {
 
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     const callArg = mockGenerateText.mock.calls[0][0];
-    expect(callArg.maxSteps).toBe(5);
+    expect(callArg.stopWhen).toBeDefined();
     expect(callArg.tools).toBeDefined();
     expect(callArg.tools.queryTool).toBeDefined();
     expect(callArg.tools.analysisTool).toBeDefined();

@@ -12,7 +12,8 @@ export function createQueryTool(ctx: ToolContext) {
   return tool({
     description: '查询销售数据。将自然语言转为 SQL 并执行，返回结构化数据。用于查找具体数据、获取明细、筛选记录。',
     inputSchema: zodSchema(inputSchema),
-    execute: async ({ query }: { query: string }) => {
+    execute: async (params) => {
+      const { query } = params;
       const db = getDb();
       const engine = new NL2SQLEngine(db);
       const result = await engine.query(query);
