@@ -1,5 +1,6 @@
 import { executeReActLoop } from './react-executor';
 import { persistMessage, loadSessionMessages } from './session';
+import { getSession, updateSessionTitle } from '@/lib/db/queries';
 import type { RequestContext, ToolContext, ChatMessage } from './types';
 import type { SSESender } from './sse-helper';
 
@@ -23,6 +24,17 @@ export class ReActGateway {
       return;
     }
 
+    // Auto-generate session title from first user message
+    if (!GREETING_PATTERN.test(trimmed)) {
+      try {
+        const session = getSession(ctx.sessionId);
+        if (!session?.title) {
+          const title = message.length > 30 ? message.slice(0, 30) + '…' : message;
+          updateSessionTitle(ctx.sessionId, title);
+        }
+      } catch { /* non-critical */ }
+    }
+
     // Load chat history
     const historyRows = loadSessionMessages(ctx.sessionId);
     const history: ChatMessage[] = historyRows
@@ -44,6 +56,11 @@ export class ReActGateway {
 
     // Execute ReAct loop
     const result = await executeReActLoop(message, history, toolCtx);
+
+    // Send text event so the frontend can display the response
+    if (result.text) {
+      send('text', { text: result.text });
+    }
 
     // Persist conversation
     persistMessage(ctx.sessionId, 'assistant', result.text);

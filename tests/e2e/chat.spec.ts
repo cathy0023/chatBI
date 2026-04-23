@@ -196,11 +196,15 @@ export default function App() {
     await chatInput.fill('分析一下');
     await sendBtn.click();
 
-    // Wait for the response to eventually complete
+    // Wait for the mock SSE response to be processed (data-phase changes from loading state)
     await page.waitForFunction(() => {
       const els = document.querySelectorAll('[data-role="assistant"]');
-      return els.length > 0 && els[els.length - 1].textContent!.trim().length > 2;
-    }, { timeout: 10000 });
+      if (els.length === 0) return false;
+      const last = els[els.length - 1];
+      const phase = last.getAttribute('data-phase');
+      // Wait until phase is no longer a loading phase (generating_sql, etc.)
+      return phase === 'done' || phase === 'error';
+    }, { timeout: 15000 });
 
     const lastMsg = page.locator('[data-role="assistant"]').last();
     const content = await lastMsg.textContent() || '';
