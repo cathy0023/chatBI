@@ -62,8 +62,16 @@ export class ReActGateway {
       send('text', { text: result.text });
     }
 
-    // Persist conversation
-    persistMessage(ctx.sessionId, 'assistant', result.text);
+    // Persist chart data alongside text so historical sessions can restore charts
+    const chartData = toolCtx.chartHtml || toolCtx.sql
+      ? JSON.stringify({
+          chartHtml: toolCtx.chartHtml || null,
+          records: toolCtx.data.length > 0 ? toolCtx.data : null,
+          columns: toolCtx.columns.length > 0 ? toolCtx.columns : null,
+          sql: toolCtx.sql || null,
+        })
+      : undefined;
+    persistMessage(ctx.sessionId, 'assistant', result.text, chartData);
 
     send('done', {});
   }

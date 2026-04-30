@@ -11,13 +11,27 @@ export async function GET(
     const messages = getMessagesBySession(id);
 
     return NextResponse.json({
-      messages: messages.map(m => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        uiSchema: m.ui_schema ? JSON.parse(m.ui_schema) : null,
-        createdAt: m.created_at,
-      })),
+      messages: messages.map(m => {
+        let chartData: { chartHtml?: string; records?: unknown[]; columns?: string[]; sql?: string } | null = null;
+        if (m.ui_schema) {
+          try {
+            const parsed = JSON.parse(m.ui_schema);
+            if (parsed.chartHtml || parsed.records || parsed.sql) {
+              chartData = parsed;
+            }
+          } catch { /* ignore malformed ui_schema */ }
+        }
+        return {
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          chartHtml: chartData?.chartHtml ?? null,
+          records: chartData?.records ?? null,
+          columns: chartData?.columns ?? null,
+          sql: chartData?.sql ?? null,
+          createdAt: m.created_at,
+        };
+      }),
     });
   } catch (error) {
     console.error('Session messages GET error:', error);

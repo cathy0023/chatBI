@@ -44,9 +44,28 @@ export default function Home() {
 
   const handleSelectMessage = useCallback((msg: ChatMessage) => {
     const isDeselecting = selectedMessageId === msg.id;
-    setSelectedMessageId(isDeselecting ? null : msg.id);
-    setIsManualSelection(!isDeselecting);
-  }, [selectedMessageId]);
+    if (isDeselecting) {
+      setSelectedMessageId(null);
+      setIsManualSelection(false);
+      return;
+    }
+
+    // If user message: find the next assistant message with chart data
+    let targetId = msg.id;
+    if (msg.role === 'user') {
+      const idx = chat.messages.findIndex(m => m.id === msg.id);
+      for (let i = idx + 1; i < chat.messages.length; i++) {
+        const m = chat.messages[i];
+        if (m.role === 'assistant' && (((m.records?.length ?? 0) > 0) || !!m.chartHtml)) {
+          targetId = m.id;
+          break;
+        }
+      }
+    }
+
+    setSelectedMessageId(targetId);
+    setIsManualSelection(true);
+  }, [selectedMessageId, chat.messages]);
 
   const handleSendMessage = useCallback((content: string) => {
     setIsManualSelection(false);

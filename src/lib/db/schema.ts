@@ -52,4 +52,13 @@ export function initSchema(): void {
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id);
   `);
+
+  // Migrations: add columns if they don't exist (safe for existing databases)
+  const columns = db.prepare("PRAGMA table_info(chat_messages)").all().map((c: { name: string }) => c.name);
+  if (!columns.includes('ui_schema')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN ui_schema TEXT');
+  }
+  if (!columns.includes('agent_trace')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN agent_trace TEXT');
+  }
 }

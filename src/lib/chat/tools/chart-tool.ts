@@ -22,6 +22,7 @@ export function createChartTool(ctx: ToolContext) {
         const html = await generateChartCode(ctx.originalQuery, ctx.data, ctx.columns);
         if (html) {
           ctx.send('chart', { html });
+          ctx.chartHtml = html;
           return { generated: true, chartType: params.chartType };
         }
         return { error: '图表生成返回空结果' };

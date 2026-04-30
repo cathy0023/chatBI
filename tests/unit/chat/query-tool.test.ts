@@ -20,7 +20,12 @@ vi.mock('@/lib/semantic/nl2sql', () => ({
 }));
 
 vi.mock('@/lib/db/connection', () => ({
-  getDb: vi.fn().mockReturnValue({ prepare: vi.fn() }),
+  getDb: vi.fn().mockReturnValue({
+    prepare: vi.fn().mockReturnValue({
+      all: vi.fn().mockReturnValue([]),
+      get: vi.fn().mockReturnValue({ cnt: 0 }),
+    }),
+  }),
 }));
 
 describe('createQueryTool', () => {

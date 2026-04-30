@@ -3,7 +3,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Card, CardContent } from '@/components/ui/card';
 import type { ChatMessage } from '@/lib/chat/use-chat';
 import { getPhaseLabel } from '@/lib/chat/use-chat';
 
@@ -28,8 +27,8 @@ export function MessageItem({ message, hasData, onClick }: MessageItemProps) {
           {isUser ? 'U' : 'AI'}
         </AvatarFallback>
       </Avatar>
-      <Card className={`max-w-[80%] py-1 ${isUser ? 'bg-blue-600 text-white' : 'bg-muted'}`}>
-        <CardContent className="px-3 py-1.5 text-sm">
+      <div className={`max-w-[80%] rounded-xl py-1 ${isUser ? 'bg-blue-600 text-white' : 'bg-muted'}`}>
+        <div className="px-3 py-1.5 text-sm">
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
@@ -51,8 +50,8 @@ export function MessageItem({ message, hasData, onClick }: MessageItemProps) {
               ) : null}
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

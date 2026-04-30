@@ -28,18 +28,36 @@ export function MessageList({ messages, isLoading, selectedMessageId, onSelectMe
           </div>
         )}
         {messages.map(msg => {
-          const hasData = msg.role === 'assistant' && ((msg.records?.length ?? 0) > 0 || !!msg.chartHtml);
-          const isSelected = msg.id === selectedMessageId;
-          return (
-            <div key={msg.id} data-role={msg.role} data-phase={msg.phase} className={isSelected && hasData ? 'ring-2 ring-blue-400 rounded-lg' : ''}>
-              <MessageItem
-                message={msg}
-                hasData={hasData}
-                onClick={hasData && onSelectMessage ? () => onSelectMessage(msg) : undefined}
-              />
-            </div>
-          );
-        })}
+  const isUser = msg.role === 'user';
+  // For user messages: check if there's a following assistant message with chart data
+  const userHasChart = isUser && (() => {
+    const idx = messages.indexOf(msg);
+    for (let i = idx + 1; i < messages.length; i++) {
+      const next = messages[i];
+      if (next.role === 'assistant' && (((next.records?.length ?? 0) > 0) || !!next.chartHtml)) {
+        return true;
+      }
+    }
+    return false;
+  })();
+  const hasData = !isUser && ((msg.records?.length ?? 0) > 0 || !!msg.chartHtml);
+  const isClickable = (isUser && userHasChart) || hasData;
+  const isSelected = msg.id === selectedMessageId;
+  return (
+    <div
+      key={msg.id}
+      data-role={msg.role}
+      data-phase={msg.phase}
+      className={isSelected && isClickable ? 'bg-blue-50/40 dark:bg-blue-900/20 rounded-lg' : ''}
+    >
+      <MessageItem
+        message={msg}
+        hasData={isClickable}
+        onClick={isClickable && onSelectMessage ? () => onSelectMessage(msg) : undefined}
+      />
+    </div>
+  );
+})}
         <div ref={bottomRef} />
       </div>
     </ScrollArea>

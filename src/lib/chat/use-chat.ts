@@ -190,11 +190,21 @@ export function useChat() {
       if (!res.ok) throw new Error('Failed to load session');
       const data = await res.json();
       const loaded: ChatMessage[] = (data.messages || []).map(
-        (m: { id: string; role: string; content: string }) => ({
+        (m: {
+          id: string; role: string; content: string;
+          chartHtml?: string | null;
+          records?: Record<string, unknown>[] | null;
+          columns?: string[] | null;
+          sql?: string | null;
+        }) => ({
           id: m.id,
           role: m.role as 'user' | 'assistant',
           content: m.content,
           phase: 'done' as LoadingPhase,
+          chartHtml: m.chartHtml ?? undefined,
+          records: m.records ?? undefined,
+          columns: m.columns ?? undefined,
+          sql: m.sql ?? undefined,
         }),
       );
       setMessages(loaded);
