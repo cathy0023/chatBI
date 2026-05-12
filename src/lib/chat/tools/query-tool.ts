@@ -95,18 +95,45 @@ export function createQueryTool(ctx: ToolContext) {
       }
 
       const engine = new NL2SQLEngine(db);
-      const result = await engine.query(query);
+      const result = await engine.query(query, ctx.abortSignal);
 
-      ctx.send('data', {
-        sql: result.sql,
-        records: result.records,
-        columns: result.columns,
-      });
+      // Don't send `data` SSE event here — the gateway sends data/chart/text
+      // in the correct order after the ReAct loop finishes, ensuring the left
+      // panel (text answer) appears before the right panel (data/chart).
 
       // Populate shared tool context so chartTool/analysisTool can access the data
-      ctx.data = result.records;
-      ctx.columns = result.columns;
-      ctx.sql = result.sql;
+      // When LLM calls queryTool multiple times (e.g., "person vs overall" comparison),
+      // append results and annotate each record with its source label so the chart
+      // tool can detect multi-series data (isMultiSeries needs name+month+>=2 names).
+      if (ctx.data.length > 0 && ctx.columns.length > 0) {
+        // Detect which person this query is about: extract from the SQL WHERE clause
+        const nameMatch = result.sql.match(/name\s*=\s*'([^']+)'/i);
+        const personName = nameMatch ? nameMatch[1] : '整体';
+        // Annotate each record with its source so buildMultiSeriesOption can group by name
+        // When SQL has no WHERE name= clause (overall/aggregate query), label as '整体'
+        const annotated = result.records.map(r => ({ ...r, name: personName }));
+        ctx.data = [...ctx.data, ...annotated];
+        const newCols = result.columns.filter(c => !ctx.columns.includes(c));
+        // Ensure 'name' column is present for multi-series detection
+        if (!ctx.columns.includes('name')) {
+          ctx.columns = [...ctx.columns, 'name', ...newCols];
+        } else {
+          ctx.columns = [...ctx.columns, ...newCols];
+        }
+        ctx.sql = result.sql;
+      } else {
+        // First query: annotate with person name or '整体'
+        const nameMatch = result.sql.match(/name\s*=\s*'([^']+)'/i);
+        const personName = nameMatch ? nameMatch[1] : '整体';
+        const annotated = result.records.map(r => ({ ...r, name: personName }));
+        ctx.data = annotated;
+        // Ensure 'name' column is always present (for multi-series detection)
+        const cols = result.columns.includes('name')
+          ? result.columns
+          : ['name', ...result.columns];
+        ctx.columns = cols;
+        ctx.sql = result.sql;
+      }
 
       // When no results, attach fuzzy name suggestions so the LLM can retry
       let suggestion: string | null = null;

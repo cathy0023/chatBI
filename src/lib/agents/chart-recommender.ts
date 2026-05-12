@@ -6,6 +6,19 @@
 
 import { getColumnLabel, SALES_COLUMN_META } from '@/types/database';
 
+/**
+ * Resolve metric value from a record.
+ * When SQL uses aggregates like SUM(deal), the column name is 'SUM(deal)' not 'deal'.
+ * This function tries exact match first, then falls back to a column containing the metric name.
+ */
+function resolveMetricValue(record: Record<string, unknown>, metric: string): number {
+  if (metric in record) return Number(record[metric]) || 0;
+  for (const key of Object.keys(record)) {
+    if (key.includes(metric)) return Number(record[key]) || 0;
+  }
+  return 0;
+}
+
 // ==================== Chart Type Recommendation ====================
 
 export type ChartType = 'table' | 'bar' | 'pie' | 'line' | 'radar';
@@ -33,6 +46,12 @@ export function recommendChart(
   // Multi-month ranking → always table
   if (isMultiMonthRanking) {
     return { uiType: 'table', dimension, metric };
+  }
+
+  // Detect chart type from user query keywords
+  const queryChartType = detectChartTypeFromQuery(query);
+  if (queryChartType) {
+    return { uiType: queryChartType, dimension, metric };
   }
 
   // Prefer LLM recommendation when available
@@ -114,28 +133,52 @@ export function buildUISchema(
 
 // ==================== Private Helpers ====================
 
+function detectChartTypeFromQuery(query: string): ChartType | null {
+  if (/饼图|占比|比例|百分比|分布/.test(query)) return 'pie';
+  if (/折线|趋势|走势|变化趋势/.test(query)) return 'line';
+  if (/柱状|柱形|条形|对比图/.test(query)) return 'bar';
+  if (/表格|明细|列表|详情/.test(query)) return 'table';
+  return null;
+}
+
 function detectDimension(query: string, records?: Record<string, unknown>[]): 'name' | 'month' | 'department' {
   const personKws = ['销售', '销售员', '销售人员', '人员', '谁', '个人', '每个人', '各人', '各位', '名字'];
-  const monthKws = ['月份', '各月', '每月', '月度', '趋势', '变化', '走势'];
+  const monthKws = ['月份', '各月', '每月', '月度', '趋势', '变化', '走势', '月对比', '月比较', '对比月'];
   const deptKws = ['部门', '校区', '各部', '各部门', '团队', '中心'];
 
-  if (personKws.some(kw => query.includes(kw))) return 'name';
-  if (deptKws.some(kw => query.includes(kw))) return 'department';
-  if (monthKws.some(kw => query.includes(kw))) return 'month';
+  // Keyword-based hints (may be wrong if query mentions a month as filter, not dimension)
+  let keywordDimension: 'name' | 'month' | 'department' | null = null;
+  if (personKws.some(kw => query.includes(kw))) keywordDimension = 'name';
+  else if (deptKws.some(kw => query.includes(kw))) keywordDimension = 'department';
+  else if (monthKws.some(kw => query.includes(kw))) keywordDimension = 'month';
+  else if (/\d+月/.test(query)) keywordDimension = 'month';
 
-  // Fallback: infer dimension from actual data columns
+  // Validate keyword hint against actual data columns
+  // Scan ALL records for available columns (merged data may have inconsistent columns)
+  if (keywordDimension && records && records.length > 0) {
+    const allKeys = new Set<string>();
+    for (const r of records) for (const k of Object.keys(r)) allKeys.add(k);
+    if (allKeys.has(keywordDimension)) return keywordDimension;
+    // Keyword dimension not in data — fall through to data-driven detection
+  } else if (keywordDimension) {
+    return keywordDimension; // No data to validate, trust keyword
+  }
+
+  // Data-driven detection: infer dimension from actual data columns
+  // Scan ALL records for available columns (merged data may have inconsistent columns)
   if (records && records.length > 0) {
-    const keys = Object.keys(records[0]);
-    // If data has unique names → group by name; unique months → group by month
-    if (keys.includes('name')) {
-      const uniqueNames = new Set(records.map(r => String(r.name || '')));
-      if (uniqueNames.size > 1) return 'name';
-    }
-    if (keys.includes('month')) {
+    const allKeys = new Set<string>();
+    for (const r of records) for (const k of Object.keys(r)) allKeys.add(k);
+
+    if (allKeys.has('month')) {
       const uniqueMonths = new Set(records.map(r => String(r.month || '')));
       if (uniqueMonths.size > 1) return 'month';
     }
-    if (keys.includes('department')) return 'department';
+    if (allKeys.has('name')) {
+      const uniqueNames = new Set(records.map(r => String(r.name || '')));
+      if (uniqueNames.size > 1) return 'name';
+    }
+    if (allKeys.has('department')) return 'department';
   }
 
   return 'name';
@@ -162,7 +205,7 @@ function detectMultiMonthRanking(query: string, records: Record<string, unknown>
   return hasRanking && (hasMultiMonth || monthsInData.size > 1);
 }
 
-function aggregateBy(
+export function aggregateBy(
   records: Record<string, unknown>[],
   dimension: string,
   metric: string,
@@ -189,7 +232,7 @@ function aggregateBy(
   for (const r of records) {
     const rawKey = r[effectiveDimension];
     const key = rawKey != null && String(rawKey).trim() !== '' ? String(rawKey) : '其他';
-    const value = Number(r[metric] || 0);
+    const value = resolveMetricValue(r, metric);
     agg[key] = (agg[key] || 0) + value;
   }
   if (effectiveDimension !== 'month') {
@@ -206,7 +249,7 @@ function buildRankingChartData(
   for (const r of records) {
     const month = String(r.month || '');
     const name = String(r.name || '');
-    const value = Number(r[metric] || 0);
+    const value = resolveMetricValue(r, metric);
     if (!byMonth[month]) byMonth[month] = [];
     byMonth[month].push({ key: `${month} ${name}`, value });
   }
