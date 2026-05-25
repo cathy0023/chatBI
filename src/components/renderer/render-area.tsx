@@ -139,7 +139,7 @@ function SandboxRenderer({ html }: { html: string }) {
     <iframe
       sandbox="allow-scripts allow-same-origin"
       srcDoc={html}
-      style={{ width: '100%', height: '100%', border: 'none', borderRadius: '8px' }}
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
       title="Chart Visualization"
     />
   );
@@ -161,11 +161,16 @@ export function RenderArea({ message, isLoading }: RenderAreaProps) {
     return <EmptyState />;
   }
 
+  const showTabs = hasData && hasChart;
+
   return (
-    <div className="flex h-full flex-col overflow-hidden p-4">
-      {/* Tab switcher */}
-      {hasData && hasChart && (
-        <div className="flex items-center gap-2 mb-3">
+    <div
+      className="grid h-full overflow-hidden"
+      style={{ gridTemplateRows: showTabs ? 'auto 1fr' : '1fr' }}
+    >
+      {/* Tab bar — auto row, only when both chart and data exist */}
+      {showTabs && (
+        <div className="flex items-center gap-2 border-b px-3 py-2">
           <Button
             variant={view === 'chart' ? 'default' : 'outline'}
             size="sm"
@@ -188,22 +193,18 @@ export function RenderArea({ message, isLoading }: RenderAreaProps) {
         </div>
       )}
 
-      {/* Chart view */}
+      {/* Chart — 1fr grid track = definite height, iframe absolute fills it */}
       {view === 'chart' && hasChart && (
-        <Card className="flex-1 min-h-[300px]">
-          <CardContent className="h-full p-3">
-            <SandboxRenderer html={message.chartHtml!} />
-          </CardContent>
-        </Card>
+        <div className="relative min-h-0">
+          <SandboxRenderer html={message.chartHtml!} />
+        </div>
       )}
 
-      {/* Table view */}
+      {/* Table */}
       {(view === 'table' || !hasChart) && hasData && message.records && message.columns && (
-        <Card className="flex-1 min-h-[300px] overflow-auto">
-          <CardContent className="p-4">
-            <DataTable records={message.records} columns={message.columns} />
-          </CardContent>
-        </Card>
+        <div className="min-h-0 overflow-auto p-3">
+          <DataTable records={message.records} columns={message.columns} />
+        </div>
       )}
 
       {/* Loading chart while data is available */}

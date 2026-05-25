@@ -29,15 +29,47 @@ export type SemanticModel = {
   businessContext: string;
 };
 
-export type FewShotExample = {
-  patterns: string[];
-  question: string;
-  sql: string;
-};
-
 export type NL2SQLResult = {
   sql: string;
   records: Record<string, unknown>[];
   confidence: number;
-  source: 'generated' | 'repaired' | 'fallback' | 'fewshot-direct' | 'fewshot-fallback';
+  source: 'generated' | 'repaired' | 'fallback';
 };
+
+// ---- 错误模式自进化 P0 类型 ----
+
+export type QueryStatus = 'success' | 'failed' | 'repaired';
+
+export type ErrorPatternKey =
+  | 'alias_chinese_column'
+  | 'missing_group_by'
+  | 'wrong_aggregate'
+  | 'all_zero_result'
+  | 'invalid_month_format'
+  | 'unknown_department';
+
+export interface QueryRecord {
+  id?: number;
+  question: string;
+  generatedSQL: string;
+  status: QueryStatus;
+  repairedSQL?: string;
+  errorMessage?: string;
+  resultRowCount: number;
+  hasAllZeroRows: boolean;
+  executionTimeMs: number;
+  createdAt?: number;
+}
+
+export interface CorrectionRule {
+  id: string;
+  patternKey: ErrorPatternKey;
+  rule: string;
+  priority: 'critical' | 'high' | 'normal';
+  status: 'auto' | 'approved' | 'rejected';
+  occurrenceCount: number;
+  effectiveness: number;
+  firstSeen: number;
+  lastSeen: number;
+  createdAt?: number;
+}

@@ -121,7 +121,7 @@ test.describe('ChatBI E2E - Critical User Flows', () => {
     // (canvas element creation and chart drawing are separate async steps)
     await page.waitForFunction(
       () => {
-        const iframe = document.querySelector('[data-testid="render-area"] iframe');
+        const iframe = document.querySelector('[data-testid="render-area"] iframe') as HTMLIFrameElement | null;
         if (!iframe || !iframe.contentDocument) return false;
         const canvas = iframe.contentDocument.querySelector('canvas');
         if (!canvas || canvas.width === 0 || canvas.height === 0) return false;

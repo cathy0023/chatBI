@@ -10,14 +10,18 @@ export function createSSEStream(handler: (send: SSESender) => Promise<void>): Re
   const stream = new ReadableStream({
     async start(controller) {
       const send: SSESender = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // Stream may be closed (client disconnected), ignore write errors
+        }
       };
 
       try {
         await handler(send);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        send('error', { error: errorMsg });
+        try { send('error', { error: errorMsg }); } catch { /* stream closed */ }
       }
 
       controller.close();

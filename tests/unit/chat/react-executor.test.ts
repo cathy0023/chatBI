@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { executeReActLoop } from '@/lib/chat/react-executor';
 import { DEFAULT_TENANT, type ToolContext } from '@/lib/chat/types';
+import type { SSESender } from '@/lib/chat/sse-helper';
 
 // ---- Mocks ----
 
-// Must use indirect reference because vi.mock is hoisted above const declarations
 vi.mock('ai', async () => {
   const actual = await vi.importActual('ai');
   return { ...actual, generateText: vi.fn() };
@@ -48,7 +48,7 @@ function makeCtx(overrides?: Partial<ToolContext>): ToolContext {
   return {
     tenant: DEFAULT_TENANT,
     sessionId: 'test-session',
-    send: vi.fn(),
+    send: vi.fn() as unknown as SSESender,
     data: [],
     columns: [],
     originalQuery: '9月成交top5',
@@ -69,9 +69,9 @@ describe('executeReActLoop', () => {
   it('returns text result from generateText', async () => {
     mockGenerateText.mockResolvedValue({
       text: '张三成交10笔，排名第一。',
-      steps: [{ text: '张三成交10笔，排名第一。', toolCalls: [] }],
+      steps: [{ text: '张三成交10笔，排名第一。', toolCalls: [], toolResults: [] }],
       toolResults: [],
-    });
+    } as unknown as Awaited<ReturnType<typeof mockGenerateText>>);
 
     const result = await executeReActLoop('9月成交top5', [], ctx);
 
@@ -85,17 +85,18 @@ describe('executeReActLoop', () => {
       text: 'ok',
       steps: [],
       toolResults: [],
-    });
+    } as unknown as Awaited<ReturnType<typeof mockGenerateText>>);
 
     await executeReActLoop('hello', [], ctx);
 
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
-    const callArg = mockGenerateText.mock.calls[0][0];
+    const callArg = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
     expect(callArg.stopWhen).toBeDefined();
     expect(callArg.tools).toBeDefined();
-    expect(callArg.tools.queryTool).toBeDefined();
-    expect(callArg.tools.analysisTool).toBeDefined();
-    expect(callArg.tools.chartTool).toBeDefined();
+    const tools = callArg.tools as Record<string, unknown>;
+    expect(tools.queryTool).toBeDefined();
+    expect(tools.analysisTool).toBeDefined();
+    expect(tools.chartTool).toBeDefined();
   });
 
   it('passes chat history as messages', async () => {
@@ -103,7 +104,7 @@ describe('executeReActLoop', () => {
       text: '继续分析',
       steps: [],
       toolResults: [],
-    });
+    } as unknown as Awaited<ReturnType<typeof mockGenerateText>>);
 
     const history = [
       { role: 'user' as const, content: '你好' },
@@ -112,7 +113,7 @@ describe('executeReActLoop', () => {
 
     await executeReActLoop('9月数据如何', history, ctx);
 
-    const callArg = mockGenerateText.mock.calls[0][0];
+    const callArg = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
     expect(callArg.messages).toEqual([
       { role: 'user', content: '你好' },
       { role: 'assistant', content: '你好！我是ChatBI助手。' },
@@ -121,21 +122,20 @@ describe('executeReActLoop', () => {
   });
 
   it('sends step events via SSE onStepFinish', async () => {
-    const onStepFinish = vi.fn();
-    mockGenerateText.mockImplementation(async (opts) => {
+    mockGenerateText.mockImplementation(async (opts: any) => {
       // Simulate the SDK calling onStepFinish for each step
       if (opts.onStepFinish) {
         await opts.onStepFinish({ text: 'thinking...', toolCalls: [] });
-        await opts.onStepFinish({ text: '', toolCalls: [{ toolName: 'queryTool' }] });
+        await opts.onStepFinish({ text: '', toolCalls: [{ type: 'function', toolName: 'queryTool', toolCallId: 'tc-1', input: {} }] });
       }
       return {
         text: '分析完成',
         steps: [
-          { text: 'thinking...', toolCalls: [] },
-          { text: '', toolCalls: [{ toolName: 'queryTool' }] },
+          { text: 'thinking...', toolCalls: [], toolResults: [] },
+          { text: '', toolCalls: [{ type: 'function', toolName: 'queryTool', toolCallId: 'tc-1', input: {} }], toolResults: [] },
         ],
-        toolResults: [{ records: [], columns: [] }],
-      };
+        toolResults: [],
+      } as unknown as Awaited<ReturnType<typeof mockGenerateText>>;
     });
 
     const result = await executeReActLoop('查询数据', [], ctx);

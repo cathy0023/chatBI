@@ -1,5 +1,5 @@
 import { SALES_SEMANTIC_MODEL } from './model';
-import type { FewShotExample } from './types';
+import { getActiveRuleTexts, seedInitialRules } from './correction-rules';
 
 const DDL = `CREATE TABLE sales_performance (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12,7 +12,13 @@ const DDL = `CREATE TABLE sales_performance (
   deal INTEGER DEFAULT 0
 );`;
 
-export function buildNL2SQLPrompt(question: string, fewShots: FewShotExample[]): string {
+export function buildNL2SQLPrompt(question: string): string {
+  // 冷启动：确保纠正规则表有初始数据
+  seedInitialRules();
+
+  // 从 correction_rules 表动态读取规则
+  const dynamicRules = getActiveRuleTexts();
+
   const table = SALES_SEMANTIC_MODEL.tables[0];
 
   const dimDesc = table.dimensions.map(d => {
@@ -30,10 +36,6 @@ export function buildNL2SQLPrompt(question: string, fewShots: FewShotExample[]):
     `  - ${m.column} (${m.label}): ${m.description} [同义词: ${m.synonyms.join(', ')}] [默认聚合: ${m.defaultAgg}]`
   ).join('\n');
 
-  const fewShotSection = fewShots.length > 0
-    ? `\n【参考示例】\n${fewShots.map(s => `问题: ${s.question}\nSQL: ${s.sql}`).join('\n\n')}\n`
-    : '';
-
   return `你是 SQL 生成引擎。根据以下语义模型定义，将用户的中文问题转换为一条 SQLite SELECT 语句。
 
 【语义模型: ${SALES_SEMANTIC_MODEL.description}】
@@ -49,16 +51,19 @@ ${metDesc}
 
 【表结构 DDL】
 ${DDL}
-${fewShotSection}
-【规则】
-1. 只生成一条 SELECT 语句，禁止 INSERT/UPDATE/DELETE/DROP/ALTER
-2. 所有字段名使用上面的 column 英文名，不要用中文列名
-3. 月份字段值必须是: 7月, 8月, 9月, 10月（参考值映射做转换）
-4. 多个月份用 IN，如 WHERE month IN ('7月','8月')
-5. 聚合时必须保留原始列名作为别名，如 SUM(deal) AS deal, SUM(wechat_added) AS wechat_added，禁止使用中文别名
-6. 除非用户明确要求“汇总/总计/合计/总共”，否则不要只返回单行聚合结果；应返回按 name 或 department 的明细/分组数据，支持后续分析 Top、低绩效、零成交
-7. 当问题包含“情况/表现/分析/排名”等语义时，优先返回 name, department, month, deal 等可分析字段
-8. 只输出 SQL，不要输出任何其他内容，不要用 markdown 代码块包裹
+
+【规则】（编号小的优先级高）
+${dynamicRules.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+【示例】
+问题: "张三的微信添加数"
+SQL: SELECT month, wechat_added FROM sales_performance WHERE name = '张三'
+
+问题: "李明7月和8月成交数"
+SQL: SELECT month, SUM(deal) AS deal FROM sales_performance WHERE name = '李明' AND month IN ('7月','8月') GROUP BY month
+
+问题: "各部门10月成交数"
+SQL: SELECT department, SUM(deal) AS deal FROM sales_performance WHERE month = '10月' GROUP BY department
 
 用户问题: "${question}"`;
 }

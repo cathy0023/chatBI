@@ -13,6 +13,7 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [isManualSelection, setIsManualSelection] = useState(false);
+  const [mobileView, setMobileView] = useState<'chat' | 'chart'>('chat');
 
   // Get the active message for the render area
   const activeMessage = (() => {
@@ -42,6 +43,16 @@ export default function Home() {
     }
   }, [chat.messages, isManualSelection]);
 
+  // Auto-switch to chart view on mobile when chart becomes available
+  useEffect(() => {
+    const last = [...chat.messages].reverse().find(
+      m => m.role === 'assistant' && m.chartHtml,
+    );
+    if (last && mobileView === 'chat') {
+      setMobileView('chart');
+    }
+  }, [chat.messages]);
+
   const handleSelectMessage = useCallback((msg: ChatMessage) => {
     const isDeselecting = selectedMessageId === msg.id;
     if (isDeselecting) {
@@ -70,6 +81,7 @@ export default function Home() {
   const handleSendMessage = useCallback((content: string) => {
     setIsManualSelection(false);
     setSelectedMessageId(null);
+    setMobileView('chat');
     chat.sendMessage(content);
   }, [chat]);
 
@@ -125,8 +137,43 @@ export default function Home() {
           />
         )}
 
-        {/* Chat + Render area */}
-        <div className="grid flex-1 overflow-hidden md:grid-cols-[3fr_2fr]">
+        {/* Mobile: Tab-based single panel — CSS Grid guarantees definite heights */}
+        <div className="grid min-h-0 flex-1 overflow-hidden md:hidden" style={{ gridTemplateRows: 'auto 1fr', height: '100%' }}>
+          {/* Mobile tab bar */}
+          <div className="flex border-b">
+            <button
+              className={`flex-1 py-2 text-sm font-medium ${mobileView === 'chat' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-muted-foreground'}`}
+              onClick={() => setMobileView('chat')}
+            >
+              对话
+            </button>
+            <button
+              className={`flex-1 py-2 text-sm font-medium ${mobileView === 'chart' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-muted-foreground'}`}
+              onClick={() => setMobileView('chart')}
+            >
+              图表
+            </button>
+          </div>
+          {/* Active mobile view — 1fr track gives definite height */}
+          <div className="min-h-0 overflow-hidden">
+            {mobileView === 'chat' ? (
+              <ChatPanel
+                messages={chat.messages}
+                isLoading={chat.isLoading}
+                error={chat.error}
+                sendMessage={handleSendMessage}
+                clearMessages={handleNewSession}
+                selectedMessageId={selectedMessageId}
+                onSelectMessage={handleSelectMessage}
+              />
+            ) : (
+              <RenderArea message={activeMessage} isLoading={chat.isLoading} />
+            )}
+          </div>
+        </div>
+
+        {/* Desktop: side-by-side layout */}
+        <div className="hidden md:grid flex-1 overflow-hidden md:grid-cols-[3fr_2fr]">
           {/* Chat Panel - 60% */}
           <div className="flex h-full flex-col overflow-hidden border-r">
             <ChatPanel
@@ -141,7 +188,7 @@ export default function Home() {
           </div>
 
           {/* Dynamic Rendering Area - 40% */}
-          <div data-testid="render-area" className="hidden md:flex h-full flex-col overflow-hidden">
+          <div data-testid="render-area" className="flex h-full flex-col overflow-hidden">
             <RenderArea
               message={activeMessage}
               isLoading={chat.isLoading}

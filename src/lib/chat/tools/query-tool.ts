@@ -109,9 +109,14 @@ export function createQueryTool(ctx: ToolContext) {
         // Detect which person this query is about: extract from the SQL WHERE clause
         const nameMatch = result.sql.match(/name\s*=\s*'([^']+)'/i);
         const personName = nameMatch ? nameMatch[1] : '整体';
-        // Annotate each record with its source so buildMultiSeriesOption can group by name
-        // When SQL has no WHERE name= clause (overall/aggregate query), label as '整体'
-        const annotated = result.records.map(r => ({ ...r, name: personName }));
+        // Only annotate records that don't already have a name field.
+        // When SQL returns a name column (e.g., SELECT name, month, deal ...),
+        // the original values are correct — overwriting them breaks the data table.
+        const annotated = result.records.map(r =>
+          r.name != null && String(r.name).trim() !== ''
+            ? { ...r }
+            : { ...r, name: personName }
+        );
         ctx.data = [...ctx.data, ...annotated];
         const newCols = result.columns.filter(c => !ctx.columns.includes(c));
         // Ensure 'name' column is present for multi-series detection
@@ -122,10 +127,14 @@ export function createQueryTool(ctx: ToolContext) {
         }
         ctx.sql = result.sql;
       } else {
-        // First query: annotate with person name or '整体'
+        // First query: annotate only records without an existing name field
         const nameMatch = result.sql.match(/name\s*=\s*'([^']+)'/i);
         const personName = nameMatch ? nameMatch[1] : '整体';
-        const annotated = result.records.map(r => ({ ...r, name: personName }));
+        const annotated = result.records.map(r =>
+          r.name != null && String(r.name).trim() !== ''
+            ? { ...r }
+            : { ...r, name: personName }
+        );
         ctx.data = annotated;
         // Ensure 'name' column is always present (for multi-series detection)
         const cols = result.columns.includes('name')

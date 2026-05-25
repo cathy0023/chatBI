@@ -21,7 +21,8 @@ export function createChartTool(ctx: ToolContext) {
       try {
         const html = await generateChartCode(ctx.originalQuery, ctx.data, ctx.columns);
         if (html) {
-          ctx.send('chart', { html });
+          // Don't send `chart` SSE event here — the gateway sends data/chart/text
+          // in the correct order after the ReAct loop finishes.
           ctx.chartHtml = html;
           return { generated: true, chartType: params.chartType };
         }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createAnalysisTool } from '@/lib/chat/tools/analysis-tool';
 import { DEFAULT_TENANT, type ToolContext } from '@/lib/chat/types';
+import type { SSESender } from '@/lib/chat/sse-helper';
 
 vi.mock('@/lib/llm/provider', () => ({
   generateTextCompat: vi.fn().mockResolvedValue({
@@ -14,11 +15,11 @@ vi.mock('@/lib/agents/chart-recommender', () => ({
 }));
 
 describe('createAnalysisTool', () => {
-  let mockSend: ReturnType<typeof vi.fn>;
+  let mockSend: SSESender;
   let ctx: ToolContext;
 
   beforeEach(() => {
-    mockSend = vi.fn();
+    mockSend = vi.fn() as unknown as SSESender;
     ctx = {
       tenant: DEFAULT_TENANT,
       sessionId: 'test-session',
@@ -37,20 +38,20 @@ describe('createAnalysisTool', () => {
     expect(t.description).toContain('分析销售数据');
   });
 
-  it('generates analysis text and sends via SSE', async () => {
+  it('generates analysis text and returns as tool result', async () => {
     const t = createAnalysisTool(ctx);
-    const result = await t.execute({ query: '分析销售表现', focus: '排名' });
-    expect(result.analysis).toContain('张三');
-    expect(mockSend).toHaveBeenCalledWith('text', expect.objectContaining({
-      text: expect.stringContaining('张三'),
-    }));
+    const result = await t.execute!({ query: '分析销售表现', focus: '排名' }, { toolCallId: 'tc-1', messages: [] });
+    expect((result as { analysis: string }).analysis).toContain('张三');
+    // analysisTool no longer sends its own `text` SSE event —
+    // the LLM incorporates the analysis into the final response instead
+    expect(mockSend).not.toHaveBeenCalledWith('text', expect.anything());
   });
 
   it('returns fallback message when data is empty', async () => {
     ctx.data = [];
     const t = createAnalysisTool(ctx);
-    const result = await t.execute({ query: '分析销售表现' });
-    expect(result.analysis).toContain('暂无数据');
+    const result = await t.execute!({ query: '分析销售表现' }, { toolCallId: 'tc-2', messages: [] });
+    expect((result as { analysis: string }).analysis).toContain('暂无数据');
     expect(mockSend).not.toHaveBeenCalled();
   });
 });

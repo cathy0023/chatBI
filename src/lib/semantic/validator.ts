@@ -36,6 +36,11 @@ export function validateSQL(rawSql: string): ValidationResult {
     }
   }
 
+  // Rule 4.5: Reject BETWEEN on month field (text comparison returns empty for '10月' < '7月')
+  if (/\bmonth\s+BETWEEN\b/i.test(sql)) {
+    return { valid: false, sql, reason: "month字段禁止使用BETWEEN，请使用IN列表如: month IN ('7月','8月')" };
+  }
+
   // Collect AS aliases so they are not flagged as unknown columns
   const aliases = new Set<string>();
   const aliasPattern = /\bAS\s+([a-zA-Z_]\w*)\b/gi;

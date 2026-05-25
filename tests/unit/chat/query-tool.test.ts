@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createQueryTool } from '@/lib/chat/tools/query-tool';
 import { DEFAULT_TENANT, type ToolContext } from '@/lib/chat/types';
+import type { SSESender } from '@/lib/chat/sse-helper';
 
 vi.mock('@/lib/semantic/nl2sql', () => ({
   NL2SQLEngine: vi.fn().mockImplementation(function () {
@@ -29,11 +30,11 @@ vi.mock('@/lib/db/connection', () => ({
 }));
 
 describe('createQueryTool', () => {
-  let mockSend: ReturnType<typeof vi.fn>;
+  let mockSend: SSESender;
   let ctx: ToolContext;
 
   beforeEach(() => {
-    mockSend = vi.fn();
+    mockSend = vi.fn() as unknown as SSESender;
     ctx = {
       tenant: DEFAULT_TENANT,
       sessionId: 'test-session',
@@ -52,19 +53,20 @@ describe('createQueryTool', () => {
 
   it('executes query and returns structured result', async () => {
     const t = createQueryTool(ctx);
-    const result = await t.execute({ query: '9月成交top5' });
-    expect(result.records).toHaveLength(2);
-    expect(result.rowCount).toBe(2);
-    expect(result.columns).toEqual(['name', 'deal']);
+    const result = await t.execute!({ query: '9月成交top5' }, { toolCallId: 'tc-1', messages: [] });
+    expect((result as { records: unknown[] }).records).toHaveLength(2);
+    expect((result as { rowCount: number }).rowCount).toBe(2);
+    expect((result as { columns: string[] }).columns).toEqual(['name', 'deal']);
   });
 
-  it('sends SSE data event with query results', async () => {
+  it('populates tool context with query results (SSE sent by gateway)', async () => {
     const t = createQueryTool(ctx);
-    await t.execute({ query: '9月成交top5' });
-    expect(mockSend).toHaveBeenCalledWith('data', expect.objectContaining({
-      sql: expect.any(String),
-      records: expect.any(Array),
-      columns: expect.any(Array),
-    }));
+    await t.execute!({ query: '9月成交top5' }, { toolCallId: 'tc-1', messages: [] });
+    // queryTool no longer sends `data` SSE directly — gateway sends it after ReAct loop
+    expect(mockSend).not.toHaveBeenCalledWith('data', expect.anything());
+    // But tool context is populated so gateway can send the merged data
+    expect(ctx.data).toHaveLength(2);
+    expect(ctx.columns).toEqual(['name', 'deal']);
+    expect(ctx.sql).toBeTruthy();
   });
 });

@@ -32,7 +32,9 @@ export function createAnalysisTool(ctx: ToolContext) {
       });
 
       const analysis = result.text || `查询到 ${data.length} 条数据。`;
-      ctx.send('text', { text: analysis });
+      // Return analysis as tool result — the LLM will incorporate it into
+      // the final response text, avoiding duplicate `text` SSE events that
+      // cause the UI to flicker.
 
       return { analysis };
     },

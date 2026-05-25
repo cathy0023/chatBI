@@ -87,6 +87,14 @@ describe('validateSQL', () => {
       }
     });
 
+    it('should reject BETWEEN on month field', () => {
+      const result = validateSQL("SELECT month, SUM(deal) AS deal FROM sales_performance WHERE month BETWEEN '7月' AND '10月' GROUP BY month");
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.reason).toContain('BETWEEN');
+      }
+    });
+
     it('should reject queries referencing unknown columns', () => {
       const result = validateSQL('SELECT password FROM sales_performance');
       expect(result.valid).toBe(false);

@@ -1,7 +1,11 @@
 import { generateTextCompat } from '@/lib/llm/provider';
 import { buildNL2SQLPrompt } from './prompt-builder';
 import { validateSQL } from './validator';
+import { logQuery } from './query-logger';
+import { detectErrorPatterns, detectUnknownDepartment } from './pattern-detector';
+import { upsertRule } from './correction-rules';
 import type Database from 'better-sqlite3';
+import type { QueryStatus } from './types';
 
 export type NL2SQLResult = {
   sql: string;
@@ -132,12 +136,14 @@ export class NL2SQLEngine {
     }
   }
 
-  async query(question: string): Promise<NL2SQLResult> {
+  async query(question: string, abortSignal?: AbortSignal): Promise<NL2SQLResult> {
+    const startTime = Date.now();
     let rawSql: string;
     try {
-      rawSql = await this.generateSQL(question);
+      rawSql = await this.generateSQL(question, abortSignal);
     } catch (llmError) {
       console.error('[NL2SQL] LLM failed:', llmError instanceof Error ? llmError.message : String(llmError));
+      logQuery({ question, generatedSQL: '', status: 'failed', errorMessage: String(llmError), resultRowCount: 0, hasAllZeroRows: false, executionTimeMs: Date.now() - startTime });
       return this.fallback();
     }
 
@@ -151,11 +157,26 @@ export class NL2SQLEngine {
 
     const validation = validateSQL(rawSql);
     if (!validation.valid) {
-      return this.selfRepair(question, rawSql, validation.reason);
+      const result = await this.selfRepair(question, rawSql, validation.reason, abortSignal);
+      const elapsed = Date.now() - startTime;
+      if (result.source === 'repaired') {
+        logQuery({ question, generatedSQL: rawSql, status: 'repaired', repairedSQL: result.sql, errorMessage: validation.reason, resultRowCount: result.records.length, hasAllZeroRows: this.hasAllZeroRows(result.records), executionTimeMs: elapsed });
+        this.learnFromRecord({ question, generatedSQL: rawSql, status: 'repaired', repairedSQL: result.sql, errorMessage: validation.reason, resultRowCount: result.records.length, hasAllZeroRows: this.hasAllZeroRows(result.records), executionTimeMs: elapsed });
+      } else {
+        logQuery({ question, generatedSQL: rawSql, status: 'failed', errorMessage: validation.reason, resultRowCount: 0, hasAllZeroRows: false, executionTimeMs: elapsed });
+        this.learnFromRecord({ question, generatedSQL: rawSql, status: 'failed', errorMessage: validation.reason, resultRowCount: 0, hasAllZeroRows: false, executionTimeMs: elapsed });
+      }
+      return result;
     }
 
     try {
       const records = this.db.prepare(validation.sql).all() as Record<string, unknown>[];
+      const elapsed = Date.now() - startTime;
+      const allZero = this.hasAllZeroRows(records);
+      logQuery({ question, generatedSQL: validation.sql, status: 'success', resultRowCount: records.length, hasAllZeroRows: allZero, executionTimeMs: elapsed });
+      if (allZero) {
+        this.learnFromRecord({ question, generatedSQL: validation.sql, status: 'success', resultRowCount: records.length, hasAllZeroRows: true, executionTimeMs: elapsed });
+      }
       return {
         sql: validation.sql,
         records,
@@ -165,13 +186,61 @@ export class NL2SQLEngine {
       };
     } catch (execError) {
       const msg = execError instanceof Error ? execError.message : String(execError);
-      return this.selfRepair(question, validation.sql, msg);
+      const result = await this.selfRepair(question, validation.sql, msg, abortSignal);
+      const elapsed = Date.now() - startTime;
+      if (result.source === 'repaired') {
+        logQuery({ question, generatedSQL: validation.sql, status: 'repaired', repairedSQL: result.sql, errorMessage: msg, resultRowCount: result.records.length, hasAllZeroRows: this.hasAllZeroRows(result.records), executionTimeMs: elapsed });
+        this.learnFromRecord({ question, generatedSQL: validation.sql, status: 'repaired', repairedSQL: result.sql, errorMessage: msg, resultRowCount: result.records.length, hasAllZeroRows: this.hasAllZeroRows(result.records), executionTimeMs: elapsed });
+      } else {
+        logQuery({ question, generatedSQL: validation.sql, status: 'failed', errorMessage: msg, resultRowCount: 0, hasAllZeroRows: false, executionTimeMs: elapsed });
+        this.learnFromRecord({ question, generatedSQL: validation.sql, status: 'failed', errorMessage: msg, resultRowCount: 0, hasAllZeroRows: false, executionTimeMs: elapsed });
+      }
+      return result;
     }
   }
 
-  private async generateSQL(question: string): Promise<string> {
+  /** 检查结果是否全为零值 */
+  private hasAllZeroRows(records: Record<string, unknown>[]): boolean {
+    if (records.length === 0) return false;
+    return records.every(row =>
+      Object.values(row).every(v => v === 0 || v === '0' || v === null)
+    );
+  }
+
+  /** 从查询记录中学习错误模式，更新纠正规则 */
+  private learnFromRecord(record: { question: string; generatedSQL: string; status: QueryStatus; repairedSQL?: string; errorMessage?: string; resultRowCount: number; hasAllZeroRows: boolean; executionTimeMs: number }): void {
+    const patterns = detectErrorPatterns(record as import('./types').QueryRecord);
+    const knownDepts = this.getKnownDepartments();
+    if (detectUnknownDepartment(record as import('./types').QueryRecord, knownDepts)) {
+      patterns.push('unknown_department');
+    }
+    const RULE_MAP: Record<string, { rule: string; priority: 'critical' | 'high' | 'normal' }> = {
+      alias_chinese_column: { rule: '禁止使用中文别名。聚合时保留原始列名，不要加 AS', priority: 'critical' },
+      missing_group_by: { rule: '使用聚合函数(SUM/AVG/COUNT)时必须加 GROUP BY', priority: 'critical' },
+      wrong_aggregate: { rule: 'SUM/AVG 只能用于数值列(wechat_added,interaction,demand,deal)', priority: 'critical' },
+      all_zero_result: { rule: '如果查询结果全为0，检查列名是否与表结构匹配', priority: 'high' },
+      invalid_month_format: { rule: '月份值必须是中文格式：7月/8月/9月/10月', priority: 'high' },
+      unknown_department: { rule: '部门名用 LIKE 模糊匹配，不要用精确等号', priority: 'normal' },
+    };
+    for (const p of patterns) {
+      const entry = RULE_MAP[p];
+      if (entry) upsertRule(p, entry.rule, entry.priority);
+    }
+  }
+
+  /** 获取已知部门列表（缓存） */
+  private deptCache: string[] | null = null;
+  private getKnownDepartments(): string[] {
+    if (!this.deptCache) {
+      const rows = this.db.prepare('SELECT DISTINCT department FROM sales_performance').all() as { department: string }[];
+      this.deptCache = rows.map(r => r.department);
+    }
+    return this.deptCache;
+  }
+
+  private async generateSQL(question: string, abortSignal?: AbortSignal): Promise<string> {
     const prompt = buildNL2SQLPrompt(question);
-    const result = await generateTextCompat({ prompt });
+    const result = await generateTextCompat({ prompt, abortSignal });
     const sql = extractSQL(result.text);
     if (!sql || !sql.trim()) {
       throw new Error('LLM returned empty SQL');
@@ -183,6 +252,7 @@ export class NL2SQLEngine {
     question: string,
     originalSql: string,
     errorMessage: string,
+    abortSignal?: AbortSignal,
   ): Promise<NL2SQLResult> {
     const repairPrompt = `你之前生成的 SQL 有错误，请修正。
 
@@ -195,7 +265,7 @@ export class NL2SQLEngine {
 请只输出修正后的 SQL，不要其他内容。`;
 
     try {
-      const result = await generateTextCompat({ prompt: repairPrompt });
+      const result = await generateTextCompat({ prompt: repairPrompt, abortSignal });
       const repairedSql = extractSQL(result.text);
       const validation = validateSQL(repairedSql);
       if (!validation.valid) return this.fallback();

@@ -52,8 +52,8 @@ describe('recommendChart', () => {
 
   it('should infer dimension from data when no keyword matches', () => {
     const result = recommendChart('随便查查', makeRecords());
-    // Data has multiple unique names → falls back to 'name' dimension
-    expect(result.dimension).toBe('name');
+    // Data has multiple unique months → falls back to 'month' dimension (checked before name)
+    expect(result.dimension).toBe('month');
   });
 
   it('should default to deal metric', () => {

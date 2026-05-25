@@ -35,6 +35,29 @@ export function getPhaseLabel(phase?: LoadingPhase): string {
   return PHASE_LABELS[phase];
 }
 
+/**
+ * Merge new records into existing records, deduplicating by name + month.
+ * When the LLM calls queryTool multiple times (e.g., "A vs overall comparison"),
+ * each call sends a separate `data` SSE event. Without merging, the frontend
+ * only keeps the last batch — breaking multi-series chart detection.
+ */
+function mergeRecords(
+  existing: Record<string, unknown>[],
+  incoming: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (existing.length === 0) return incoming;
+  if (incoming.length === 0) return existing;
+
+  const key = (r: Record<string, unknown>) =>
+    `${r.name ?? ''}_${r.month ?? ''}`;
+
+  const seen = new Map<string, Record<string, unknown>>();
+  for (const r of existing) seen.set(key(r), r);
+  for (const r of incoming) seen.set(key(r), r); // overwrite duplicates with newer data
+
+  return Array.from(seen.values());
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -118,11 +141,19 @@ export function useChat() {
                   break;
                 case 'data':
                   setMessages(prev =>
-                    prev.map(m =>
-                      m.id === assistantId
-                        ? { ...m, sql: parsed.sql, records: parsed.records, columns: parsed.columns }
-                        : m,
-                    ),
+                    prev.map(m => {
+                      if (m.id !== assistantId) return m;
+                      const existingRecords = m.records || [];
+                      const existingColumns = m.columns || [];
+                      const mergedRecords = mergeRecords(existingRecords, parsed.records || []);
+                      const mergedColumns = [...new Set([...existingColumns, ...(parsed.columns || [])])];
+                      return {
+                        ...m,
+                        sql: parsed.sql || m.sql,
+                        records: mergedRecords,
+                        columns: mergedColumns,
+                      };
+                    }),
                   );
                   break;
                 case 'chart':
@@ -131,6 +162,24 @@ export function useChat() {
                       m.id === assistantId ? { ...m, chartHtml: parsed.html } : m,
                     ),
                   );
+                  break;
+                case 'step':
+                  // ReAct loop progress — map tool calls to loading phases
+                  if (parsed.type === 'tool_call') {
+                    const toolPhase: Record<string, LoadingPhase> = {
+                      queryTool: 'generating_sql',
+                      analysisTool: 'analyzing',
+                      chartTool: 'generating_chart',
+                    };
+                    const phase = toolPhase[parsed.toolName];
+                    if (phase) {
+                      setMessages(prev =>
+                        prev.map(m =>
+                          m.id === assistantId ? { ...m, phase } : m,
+                        ),
+                      );
+                    }
+                  }
                   break;
                 case 'error':
                   setError(parsed.error || parsed.message);
