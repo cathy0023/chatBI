@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ReActGateway } from '@/lib/chat/react-gateway';
 import { DEFAULT_TENANT, type RequestContext } from '@/lib/chat/types';
+import type { SSESender } from '@/lib/chat/sse-helper';
 
 // ---- Mocks ----
 
@@ -16,6 +17,11 @@ vi.mock('@/lib/chat/session', () => ({
   ensureSession: vi.fn().mockReturnValue('session-1'),
   persistMessage: vi.fn().mockReturnValue('msg-1'),
   loadSessionMessages: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('@/lib/db/queries', () => ({
+  getSession: vi.fn().mockReturnValue({ id: 'session-1', title: null }),
+  updateSessionTitle: vi.fn(),
 }));
 
 // Grab hoisted mocks
@@ -38,12 +44,12 @@ function makeCtx(overrides?: Partial<RequestContext>): RequestContext {
 
 describe('ReActGateway', () => {
   let gateway: ReActGateway;
-  let send: ReturnType<typeof vi.fn>;
+  let send: SSESender;
 
   beforeEach(() => {
     vi.clearAllMocks();
     gateway = new ReActGateway();
-    send = vi.fn();
+    send = vi.fn() as unknown as SSESender;
   });
 
   it('returns greeting for greeting messages and does NOT call executeReActLoop', async () => {
@@ -75,7 +81,13 @@ describe('ReActGateway', () => {
         tenant: DEFAULT_TENANT,
         sessionId: 'session-1',
         originalQuery: '9月成交top5',
+        data: [],
+        columns: [],
+        dataSource: 'local',
+        send,
       }),
+      null, // no previous query context (empty history)
+      undefined, // no embeddedData in local mode
     );
   });
 
@@ -96,16 +108,17 @@ describe('ReActGateway', () => {
       'session-1',
       'assistant',
       '张三成交10笔，排名第一。',
+      undefined, // no chart data
     );
   });
 
   it('loads and filters chat history for non-greeting queries', async () => {
+    // Mock loadSessionMessages to return DB rows with all required fields
     mockLoadSessionMessages.mockReturnValue([
-      { role: 'user', content: '你好' },
-      { role: 'assistant', content: '你好！' },
-      { role: 'system', content: 'some system message' },
-      { role: 'user', content: '9月数据' },
-      { role: 'assistant', content: '9月成交汇总如下' },
+      { id: '1', session_id: 'session-1', role: 'user', content: '你好', ui_schema: null, agent_trace: null, created_at: '2026-01-01' },
+      { id: '2', session_id: 'session-1', role: 'assistant', content: '你好！', ui_schema: null, agent_trace: null, created_at: '2026-01-01' },
+      { id: '3', session_id: 'session-1', role: 'user', content: '9月数据', ui_schema: null, agent_trace: null, created_at: '2026-01-01' },
+      { id: '4', session_id: 'session-1', role: 'assistant', content: '9月成交汇总如下', ui_schema: null, agent_trace: null, created_at: '2026-01-01' },
     ]);
 
     const ctx = makeCtx({ message: '8月数据' });
@@ -113,8 +126,8 @@ describe('ReActGateway', () => {
     await gateway.execute('8月数据', ctx, send);
 
     // History passed to executeReActLoop should only contain user/assistant messages
-    const historyArg = mockExecuteReActLoop.mock.calls[0][1];
+    const historyArg = mockExecuteReActLoop.mock.calls[0][1] as Array<{ role: string }>;
     expect(historyArg).toHaveLength(4);
-    expect(historyArg.every((m: { role: string }) => m.role === 'user' || m.role === 'assistant')).toBe(true);
+    expect(historyArg.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
   });
 });
