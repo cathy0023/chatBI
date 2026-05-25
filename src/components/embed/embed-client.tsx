@@ -63,11 +63,18 @@ export function EmbedClient({ onDataReady }: EmbedClientProps) {
           body: JSON.stringify({ message: text, embedded: true, records, columns }),
         });
 
-        if (!res.ok) throw new Error('请求失败');
+        if (!res.ok) {
+          const text2 = await res.text();
+          console.error('[EmbedClient] API error:', res.status, text2);
+          setError(`请求失败: ${res.status}`);
+          setIsLoading(false);
+          return;
+        }
 
         const reader = res.body?.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let eventType = '';
 
         if (reader) {
           while (true) {
@@ -79,34 +86,43 @@ export function EmbedClient({ onDataReady }: EmbedClientProps) {
             buffer = lines.pop() ?? '';
 
             for (const line of lines) {
-              if (!line.startsWith('event: ') && !line.startsWith('data: ')) continue;
-              const [, raw] = line.split(': ');
-              try {
-                const event = JSON.parse(raw);
-                if (event.type === 'step') continue;
+              if (line.startsWith('event: ')) {
+                eventType = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                const raw = line.slice(6);
+                try {
+                  const event = JSON.parse(raw);
+                  // event.type is from the SSE event name, not the JSON body
+                  const type = eventType || event.type;
 
-                setMessages(prev => {
-                  const last = prev[prev.length - 1];
-                  if (event.type === 'text') {
-                    const newContent = (last?.role === 'assistant' ? last.content : '') + event.text;
-                    if (last?.role === 'assistant') {
-                      return [...prev.slice(0, -1), { ...last, content: newContent }];
+                  if (type === 'step') { eventType = ''; continue; }
+
+                  setMessages(prev => {
+                    const last = prev[prev.length - 1];
+                    if (type === 'text') {
+                      const newContent = (last?.role === 'assistant' ? last.content : '') + event.text;
+                      eventType = '';
+                      if (last?.role === 'assistant') {
+                        return [...prev.slice(0, -1), { ...last, content: newContent }];
+                      }
+                      return [...prev, { id: crypto.randomUUID(), role: 'assistant', content: newContent }];
                     }
-                    return [...prev, { id: crypto.randomUUID(), role: 'assistant', content: newContent }];
-                  }
-                  if (event.type === 'data' && last?.role === 'assistant') {
-                    return [...prev.slice(0, -1), {
-                      ...last,
-                      records: event.records,
-                      columns: event.columns,
-                    }];
-                  }
-                  if (event.type === 'chart' && last?.role === 'assistant') {
-                    return [...prev.slice(0, -1), { ...last, chartHtml: event.html }];
-                  }
-                  return prev;
-                });
-              } catch { /* ignore parse errors */ }
+                    if (type === 'data' && last?.role === 'assistant') {
+                      eventType = '';
+                      return [...prev.slice(0, -1), {
+                        ...last,
+                        records: event.records,
+                        columns: event.columns,
+                      }];
+                    }
+                    if (type === 'chart' && last?.role === 'assistant') {
+                      eventType = '';
+                      return [...prev.slice(0, -1), { ...last, chartHtml: event.html }];
+                    }
+                    return prev;
+                  });
+                } catch { /* ignore parse errors */ }
+              }
             }
           }
         }
@@ -118,6 +134,15 @@ export function EmbedClient({ onDataReady }: EmbedClientProps) {
     },
     [isLoading, records, columns],
   );
+
+  if (error) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center bg-background gap-4">
+        <div className="text-destructive">出错: {error}</div>
+        <button className="text-sm text-blue-600" onClick={() => setError(null)}>重试</button>
+      </div>
+    );
+  }
 
   if (status === 'waiting') {
     return (

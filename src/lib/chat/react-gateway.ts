@@ -4,7 +4,7 @@ import { getSession, updateSessionTitle } from '@/lib/db/queries';
 import type { RequestContext, ToolContext, ChatMessage, ReActResult } from './types';
 import type { SSESender } from './sse-helper';
 
-const GREETING_PATTERN = /^(你好|hi|hello|嗨|hey|哈喽|早上好|下午好|晚上好|您好)\s*[!.?？。！]?\s*$/i;
+const GREETING_PATTERN = /^(你好|hi|hello|嗨|hey|哈喽|早上好|下午好|晚上好|您好)([!.?？。！]*\s*)?$/i;
 
 const GREETING_RESPONSE = '你好！我是 ChatBI 销售数据分析助手。你可以问我关于销售业绩的问题，比如：\n\n- **9月成交top5的销售**\n- **各部门成交汇总**\n- **每月成交趋势**\n\n试试看吧！';
 
