@@ -15,9 +15,10 @@ type ChatPanelProps = {
   clearMessages: () => void;
   selectedMessageId?: string | null;
   onSelectMessage?: (msg: ChatMessage) => void;
+  inlineChart?: boolean;
 };
 
-export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages, selectedMessageId, onSelectMessage }: ChatPanelProps) {
+export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages, selectedMessageId, onSelectMessage, inlineChart }: ChatPanelProps) {
   return (
     <div className="flex h-full flex-col min-h-0">
       {/* Chat Panel Header */}
@@ -54,6 +55,7 @@ export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessag
         isLoading={isLoading}
         selectedMessageId={selectedMessageId}
         onSelectMessage={onSelectMessage}
+        inlineChart={inlineChart}
       />
 
       {/* Input */}

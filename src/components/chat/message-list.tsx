@@ -10,9 +10,10 @@ type MessageListProps = {
   isLoading: boolean;
   selectedMessageId?: string | null;
   onSelectMessage?: (message: ChatMessage) => void;
+  inlineChart?: boolean;
 };
 
-export function MessageList({ messages, isLoading, selectedMessageId, onSelectMessage }: MessageListProps) {
+export function MessageList({ messages, isLoading, selectedMessageId, onSelectMessage, inlineChart }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,6 +55,7 @@ export function MessageList({ messages, isLoading, selectedMessageId, onSelectMe
         message={msg}
         hasData={isClickable}
         onClick={isClickable && onSelectMessage ? () => onSelectMessage(msg) : undefined}
+        inlineChart={inlineChart}
       />
     </div>
   );

@@ -10,9 +10,10 @@ type MessageItemProps = {
   message: ChatMessage;
   hasData?: boolean;
   onClick?: () => void;
+  inlineChart?: boolean;
 };
 
-export function MessageItem({ message, hasData, onClick }: MessageItemProps) {
+export function MessageItem({ message, hasData, onClick, inlineChart }: MessageItemProps) {
   const isUser = message.role === 'user';
   const isLoading = message.phase && message.phase !== 'done' && message.phase !== 'error';
   const phaseLabel = getPhaseLabel(message.phase);
@@ -51,6 +52,16 @@ export function MessageItem({ message, hasData, onClick }: MessageItemProps) {
             </>
           )}
         </div>
+        {inlineChart && message.chartHtml && (
+          <div className="mt-2 mx-3 mb-3 border rounded overflow-hidden">
+            <iframe
+              srcDoc={message.chartHtml}
+              className="w-full border-0"
+              style={{ height: '280px' }}
+              title="chart"
+            />
+          </div>
+        )}
       </div>
     </div>
   );
