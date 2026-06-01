@@ -4,19 +4,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { setupMGVMessageHandler } from '@/lib/mgv/message-handler';
 import { ChatPanel } from '@/components/chat/chat-panel';
 import { useEmbedChat } from '@/lib/chat/use-embed-chat';
-import type { MGVContext } from '@/lib/mgv/types';
 
 export function EmbedClient() {
   const [records, setRecords] = useState<Record<string, unknown>[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
-  const [context, setContext] = useState<MGVContext | undefined>();
   const [dataVersion, setDataVersion] = useState(0);
 
   useEffect(() => {
-    const cleanup = setupMGVMessageHandler((recs, cols, ctx) => {
+    const cleanup = setupMGVMessageHandler((recs, cols) => {
       setRecords(recs);
       setColumns(cols);
-      setContext(ctx);
       setDataVersion((v) => v + 1);
     });
     window.parent.postMessage({ type: 'CHATBI_READY' }, '*');

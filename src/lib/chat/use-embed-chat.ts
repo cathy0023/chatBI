@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { ChatMessage, LoadingPhase } from './use-chat';
 
 export function useEmbedChat(records: Record<string, unknown>[], columns: string[]) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -26,10 +27,13 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
       ]);
 
       try {
+        const ac = new AbortController();
+        abortRef.current = ac;
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text, embedded: true, records, columns }),
+          signal: ac.signal,
         });
 
         if (!res.ok) {
@@ -136,6 +140,7 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
           }
         }
       } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         const msg = err instanceof Error ? err.message : '分析失败';
         setError(msg);
         setMessages(prev =>
@@ -147,13 +152,16 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
         );
       } finally {
         setIsLoading(false);
+        abortRef.current = null;
       }
     },
     [isLoading, records, columns],
   );
 
   const clearMessages = useCallback(() => {
+    abortRef.current?.abort();
     setMessages([]);
+    setIsLoading(false);
     setError(null);
   }, []);
 
