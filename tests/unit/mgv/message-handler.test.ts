@@ -9,6 +9,8 @@ describe('setupMGVMessageHandler', () => {
     vi.stubGlobal('window', {
       addEventListener: mockAddEventListener,
       removeEventListener: mockRemoveEventListener,
+      __CHATBI_BUFFERING: true,
+      __CHATBI_BUFFER: [],
     });
     mockAddEventListener.mockClear();
     mockRemoveEventListener.mockClear();
@@ -96,7 +98,32 @@ describe('setupMGVMessageHandler', () => {
   it('cleanup 返回移除监听器的函数', () => {
     const cleanup = setupMGVMessageHandler({ onData: vi.fn() });
     cleanup();
-    // setup removes earlyHandler + cleanup removes handler = 2 calls
     expect(mockRemoveEventListener).toHaveBeenCalledWith('message', expect.any(Function));
+  });
+
+  it('重放 inline script 缓冲的消息（竞态修复）', () => {
+    const onData = vi.fn();
+    const onModeChange = vi.fn();
+
+    // 模拟 inline script 缓冲了两条消息
+    const w = window as unknown as { __CHATBI_BUFFERING?: boolean; __CHATBI_BUFFER?: MessageEvent[] };
+    w.__CHATBI_BUFFER = [
+      new MessageEvent('message', {
+        data: { type: 'MGV_TABLE_DATA', records: [{ a: 1 }], columns: ['a'] },
+      }),
+      new MessageEvent('message', {
+        data: { type: 'DRAWER_MODE_CHANGE', mode: 'maximized' },
+      }),
+    ];
+
+    setupMGVMessageHandler({ onData, onModeChange });
+
+    // 缓冲的消息应该被重放
+    expect(onData).toHaveBeenCalledWith([{ a: 1 }], ['a'], ['a'], undefined);
+    expect(onModeChange).toHaveBeenCalledWith('maximized');
+    // 缓冲标志应该被关闭
+    expect(w.__CHATBI_BUFFERING).toBe(false);
+    // 缓冲区应该被清空
+    expect(w.__CHATBI_BUFFER?.length).toBe(0);
   });
 });

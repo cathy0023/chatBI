@@ -25,26 +25,11 @@ export interface MGVHandlers {
   onModeChange?: (mode: 'normal' | 'maximized') => void;
 }
 
-// Early buffer: capture messages arriving before React mounts
-const earlyBuffer: MessageEvent[] = [];
-
-function earlyHandler(e: MessageEvent) {
-  const data = e.data as MGVMessage;
-  if (data?.type === 'MGV_TABLE_DATA' || data?.type === 'DRAWER_MODE_CHANGE') {
-    earlyBuffer.push(e);
-  }
-}
-
-// Register at module load time — runs before React mounts
-if (typeof window !== 'undefined') {
-  window.addEventListener('message', earlyHandler);
-}
-
 /**
  * 监听 MGV iframe 通过 postMessage 传来的数据。
  * 返回 cleanup 函数，调用后移除监听器。
  *
- * 会自动重放模块加载后、React mount 前收到的消息（解决竞态条件）。
+ * 会自动重放 inline script 缓冲的消息（解决 Vue @load 竞态条件）。
  */
 export function setupMGVMessageHandler(handlers: MGVHandlers): () => void {
   function handler(e: MessageEvent) {
@@ -60,12 +45,16 @@ export function setupMGVMessageHandler(handlers: MGVHandlers): () => void {
 
   window.addEventListener('message', handler);
 
-  // Stop buffering and replay any messages that arrived before React mounted
-  window.removeEventListener('message', earlyHandler);
-  for (const e of earlyBuffer) {
-    handler(e);
+  // Stop inline buffer and replay captured messages
+  const w = window as unknown as { __CHATBI_BUFFERING?: boolean; __CHATBI_BUFFER?: MessageEvent[] };
+  w.__CHATBI_BUFFERING = false;
+  const buffer = w.__CHATBI_BUFFER;
+  if (buffer && buffer.length > 0) {
+    for (const e of buffer) {
+      handler(e);
+    }
+    buffer.length = 0;
   }
-  earlyBuffer.length = 0;
 
   return () => {
     window.removeEventListener('message', handler);
