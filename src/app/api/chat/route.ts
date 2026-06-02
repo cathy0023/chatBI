@@ -11,31 +11,19 @@ interface ChatBody {
   embedded?: boolean;
   records?: Record<string, unknown>[];
   columns?: string[];
+  labels?: string[];
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: ChatBody = await request.json();
-    const { message, sessionId, embedded, records, columns } = body;
+    const { message, sessionId, embedded, records, columns, labels } = body;
 
     if (!message || typeof message !== 'string') {
       return Response.json({ error: 'message is required' }, { status: 400 });
     }
 
-    // 嵌入模式：跳过 session，用临时 ID
-    if (embedded) {
-      const sid = 'embed-' + crypto.randomUUID();
-      return createSSEStream(async (send) => {
-        await new ReActGateway().execute(
-          message,
-          { sessionId: sid, tenant: DEFAULT_TENANT, message },
-          send,
-          { records: records ?? [], columns: columns ?? [] },
-        );
-      });
-    }
-
-    // 独立模式
+    // embed 和独立模式统一走 ensureSession
     const sid = ensureSession(sessionId);
     persistMessage(sid, 'user', message);
 
@@ -45,6 +33,7 @@ export async function POST(request: NextRequest) {
         message,
         { sessionId: sid, tenant: DEFAULT_TENANT, message },
         send,
+        embedded ? { records: records ?? [], columns: columns ?? [], labels: labels ?? [] } : undefined,
       );
     });
   } catch (error) {

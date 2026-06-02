@@ -46,45 +46,40 @@ export class ReActGateway {
     ctx: RequestContext,
     send: SSESender,
     // 嵌入模式：MGV iframe postMessage 传来的数据
-    embeddedData?: { records: Record<string, unknown>[]; columns: string[]; mgvContext?: ToolContext['mgvContext'] },
+    embeddedData?: { records: Record<string, unknown>[]; columns: string[]; labels: string[]; mgvContext?: ToolContext['mgvContext'] },
   ): Promise<void> {
     const trimmed = message.trim();
     const isEmbedded = !!embeddedData;
 
-    // 嵌入模式下跳过 greeting 持久化（无 session 概念）
     if (GREETING_PATTERN.test(trimmed)) {
       send('text', { text: GREETING_RESPONSE });
-      if (!isEmbedded) persistMessage(ctx.sessionId, 'assistant', GREETING_RESPONSE);
+      persistMessage(ctx.sessionId, 'assistant', GREETING_RESPONSE);
       send('done', {});
       return;
     }
 
-    // 嵌入模式下跳过 session title 自动生成
-    if (!isEmbedded && !GREETING_PATTERN.test(trimmed)) {
-      try {
-        const session = getSession(ctx.sessionId);
-        if (!session?.title) {
-          const title = message.length > 30 ? message.slice(0, 30) + '…' : message;
-          updateSessionTitle(ctx.sessionId, title);
-        }
-      } catch { /* non-critical */ }
-    }
+    // 自动生成 session title（首次消息）
+    try {
+      const session = getSession(ctx.sessionId);
+      if (!session?.title) {
+        const title = message.length > 30 ? message.slice(0, 30) + '…' : message;
+        updateSessionTitle(ctx.sessionId, title);
+      }
+    } catch { /* non-critical */ }
 
-    // Load chat history（嵌入模式下跳过）
+    // Load chat history
     let history: ChatMessage[] = [];
     let previousQueryContext: { sql: string; query: string } | null = null;
-    if (!isEmbedded) {
-      const historyRows = loadSessionMessages(ctx.sessionId);
-      history = historyRows
-        .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
-        .map((m: { role: string; content: string }) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
-      previousQueryContext = extractPreviousQueryContext(
-        historyRows as Array<{ role: string; content: string; ui_schema?: string | null }>,
-      );
-    }
+    const historyRows = loadSessionMessages(ctx.sessionId);
+    history = historyRows
+      .filter((m: { role: string }) => m.role === 'user' || m.role === 'assistant')
+      .map((m: { role: string; content: string }) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
+    previousQueryContext = extractPreviousQueryContext(
+      historyRows as Array<{ role: string; content: string; ui_schema?: string | null }>,
+    );
 
     // Build tool context（嵌入模式下预填充数据）
     const toolCtx: ToolContext = {
@@ -93,6 +88,7 @@ export class ReActGateway {
       send,
       data: embeddedData?.records ?? [],
       columns: embeddedData?.columns ?? [],
+      labels: embeddedData?.labels ?? [],
       originalQuery: message,
       dataSource: isEmbedded ? 'embedded' : 'local',
       mgvContext: embeddedData?.mgvContext,
@@ -138,21 +134,23 @@ export class ReActGateway {
 
     // Send chart after data
     if (toolCtx.chartHtml) {
-      send('chart', { html: toolCtx.chartHtml });
+      send('chart', {
+        html: toolCtx.chartHtml,
+        option: toolCtx.chartOption,
+      });
     }
 
-    // 嵌入模式下跳过 session 持久化
-    if (!isEmbedded) {
-      const chartData = toolCtx.chartHtml || toolCtx.sql
-        ? JSON.stringify({
-            chartHtml: toolCtx.chartHtml || null,
-            records: toolCtx.data.length > 0 ? toolCtx.data : null,
-            columns: toolCtx.columns.length > 0 ? toolCtx.columns : null,
-            sql: toolCtx.sql || null,
-          })
-        : undefined;
-      persistMessage(ctx.sessionId, 'assistant', result.text, chartData);
-    }
+    // 持久化 assistant 消息（包含 chartOption）
+    const chartData = toolCtx.chartHtml || toolCtx.chartOption || toolCtx.sql
+      ? JSON.stringify({
+          chartHtml: toolCtx.chartHtml || null,
+          chartOption: toolCtx.chartOption || null,
+          records: toolCtx.data.length > 0 ? toolCtx.data : null,
+          columns: toolCtx.columns.length > 0 ? toolCtx.columns : null,
+          sql: toolCtx.sql || null,
+        })
+      : undefined;
+    persistMessage(ctx.sessionId, 'assistant', result.text, chartData);
 
     send('done', {});
   }

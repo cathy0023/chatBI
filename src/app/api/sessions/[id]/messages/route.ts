@@ -12,11 +12,11 @@ export async function GET(
 
     return NextResponse.json({
       messages: messages.map(m => {
-        let chartData: { chartHtml?: string; records?: unknown[]; columns?: string[]; sql?: string } | null = null;
+        let chartData: { chartHtml?: string; chartOption?: Record<string, unknown>; records?: unknown[]; columns?: string[]; sql?: string } | null = null;
         if (m.ui_schema) {
           try {
             const parsed = JSON.parse(m.ui_schema);
-            if (parsed.chartHtml || parsed.records || parsed.sql) {
+            if (parsed.chartHtml || parsed.chartOption || parsed.records || parsed.sql) {
               chartData = parsed;
             }
           } catch { /* ignore malformed ui_schema */ }
@@ -26,6 +26,7 @@ export async function GET(
           role: m.role,
           content: m.content,
           chartHtml: chartData?.chartHtml ?? null,
+          chartOption: chartData?.chartOption ?? null,
           records: chartData?.records ?? null,
           columns: chartData?.columns ?? null,
           sql: chartData?.sql ?? null,

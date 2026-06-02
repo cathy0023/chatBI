@@ -1,11 +1,66 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { ChatMessage, LoadingPhase } from './use-chat';
 
-export function useEmbedChat(records: Record<string, unknown>[], columns: string[]) {
+const EMBED_SESSION_KEY = 'chatbi_embed_session_id';
+
+export function useEmbedChat(records: Record<string, unknown>[], columns: string[], labels: string[]) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | undefined>();
+  const [restored, setRestored] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Persist sessionId to localStorage whenever it changes
+  useEffect(() => {
+    if (sessionId) {
+      try { localStorage.setItem(EMBED_SESSION_KEY, sessionId); } catch { /* ignore */ }
+    }
+  }, [sessionId]);
+
+  // Auto-restore last session on mount (iframe reload survival)
+  useEffect(() => {
+    if (restored) return;
+    try {
+      const saved = localStorage.getItem(EMBED_SESSION_KEY);
+      if (saved) {
+        setRestored(true);
+        setIsLoading(true);
+        fetch(`/api/sessions/${saved}/messages`)
+          .then(res => res.ok ? res.json() : Promise.reject())
+          .then(data => {
+            const loaded: ChatMessage[] = (data.messages || []).map(
+              (m: {
+                id: string; role: string; content: string;
+                chartHtml?: string | null;
+                chartOption?: Record<string, unknown> | null;
+                records?: Record<string, unknown>[] | null;
+                columns?: string[] | null;
+                sql?: string | null;
+              }) => ({
+                id: m.id,
+                role: m.role as 'user' | 'assistant',
+                content: m.content,
+                phase: 'done' as LoadingPhase,
+                chartHtml: m.chartHtml ?? undefined,
+                chartOption: m.chartOption ?? undefined,
+                records: m.records ?? undefined,
+                columns: m.columns ?? undefined,
+                sql: m.sql ?? undefined,
+              }),
+            );
+            if (loaded.length > 0) {
+              setMessages(loaded);
+              setSessionId(saved);
+            }
+          })
+          .catch(() => { /* session might have been deleted */ })
+          .finally(() => setIsLoading(false));
+      } else {
+        setRestored(true);
+      }
+    } catch { setRestored(true); }
+  }, [restored]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -32,7 +87,7 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, embedded: true, records, columns }),
+          body: JSON.stringify({ message: text, sessionId, embedded: true, records, columns, labels }),
           signal: ac.signal,
         });
 
@@ -65,6 +120,9 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
                 const parsed = JSON.parse(raw);
 
                 switch (currentEvent) {
+                  case 'session':
+                    setSessionId(parsed.sessionId);
+                    break;
                   case 'status':
                     setMessages(prev =>
                       prev.map(m =>
@@ -93,7 +151,9 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
                   case 'chart':
                     setMessages(prev =>
                       prev.map(m =>
-                        m.id === assistantId ? { ...m, chartHtml: parsed.html } : m,
+                        m.id === assistantId
+                          ? { ...m, chartHtml: parsed.html, chartOption: parsed.option }
+                          : m,
                       ),
                     );
                     break;
@@ -155,7 +215,7 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
         abortRef.current = null;
       }
     },
-    [isLoading, records, columns],
+    [isLoading, records, columns, labels, sessionId],
   );
 
   const clearMessages = useCallback(() => {
@@ -163,7 +223,46 @@ export function useEmbedChat(records: Record<string, unknown>[], columns: string
     setMessages([]);
     setIsLoading(false);
     setError(null);
+    try { localStorage.removeItem(EMBED_SESSION_KEY); } catch { /* ignore */ }
   }, []);
 
-  return { messages, isLoading, error, sendMessage, clearMessages };
+  const loadSessionMessages = useCallback(async (targetSessionId: string) => {
+    abortRef.current?.abort();
+    setIsLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/${targetSessionId}/messages`);
+      if (!res.ok) throw new Error('Failed to load session');
+      const data = await res.json();
+      const loaded: ChatMessage[] = (data.messages || []).map(
+        (m: {
+          id: string; role: string; content: string;
+          chartHtml?: string | null;
+          chartOption?: Record<string, unknown> | null;
+          records?: Record<string, unknown>[] | null;
+          columns?: string[] | null;
+          sql?: string | null;
+        }) => ({
+          id: m.id,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          phase: 'done' as LoadingPhase,
+          chartHtml: m.chartHtml ?? undefined,
+          chartOption: m.chartOption ?? undefined,
+          records: m.records ?? undefined,
+          columns: m.columns ?? undefined,
+          sql: m.sql ?? undefined,
+        }),
+      );
+      setMessages(loaded);
+      setSessionId(targetSessionId);
+      setError(null);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to load session';
+      setError(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  return { messages, isLoading, error, sessionId, sendMessage, clearMessages, loadSessionMessages };
 }
