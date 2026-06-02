@@ -14,6 +14,9 @@ test('embed session restores after page reload', async ({ page }) => {
   // ---- Phase 1: 首次加载，发送消息 ----
   await page.goto('http://localhost:3000/embed');
 
+  // 等待组件 mount（出现"等待数据..."说明已渲染）
+  await page.waitForSelector('text=等待数据', { timeout: 10000 });
+
   // 模拟 MGV 发送数据
   await page.evaluate(() => {
     window.postMessage({
@@ -27,8 +30,8 @@ test('embed session restores after page reload', async ({ page }) => {
     }, '*');
   });
 
-  // 等待"等待数据..."消失
-  await page.waitForTimeout(500);
+  // 等待数据加载完（"等待数据..."消失）
+  await page.waitForFunction(() => !document.body.textContent?.includes('等待数据'), { timeout: 5000 });
 
   // 找到输入框并发送消息
   const input = page.locator('textarea, input[type="text"]').first();

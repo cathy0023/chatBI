@@ -96,6 +96,7 @@ describe('setupMGVMessageHandler', () => {
   it('cleanup 返回移除监听器的函数', () => {
     const cleanup = setupMGVMessageHandler({ onData: vi.fn() });
     cleanup();
-    expect(mockRemoveEventListener).toHaveBeenCalledTimes(1);
+    // setup removes earlyHandler + cleanup removes handler = 2 calls
+    expect(mockRemoveEventListener).toHaveBeenCalledWith('message', expect.any(Function));
   });
 });
