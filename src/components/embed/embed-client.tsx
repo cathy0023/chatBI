@@ -13,12 +13,7 @@ export function EmbedClient() {
   const [columns, setColumns] = useState<string[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [dataVersion, setDataVersion] = useState(0);
-  const [layoutMode, setLayoutMode] = useState<'normal' | 'maximized'>(() => {
-    try {
-      const saved = localStorage.getItem('chatbi_embed_layout');
-      return saved === 'maximized' ? 'maximized' : 'normal';
-    } catch { return 'normal'; }
-  });
+  const [layoutMode, setLayoutMode] = useState<'normal' | 'maximized'>('normal');
 
   // Message selection (mirrors page.tsx logic)
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
@@ -34,7 +29,6 @@ export function EmbedClient() {
       },
       onModeChange: (mode) => {
         setLayoutMode(mode);
-        try { localStorage.setItem('chatbi_embed_layout', mode); } catch { /* ignore */ }
       },
     });
     window.parent.postMessage({ type: 'CHATBI_READY' }, '*');
