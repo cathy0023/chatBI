@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import type { ChatMessage } from '@/lib/chat/use-chat';
 import { getPhaseLabel } from '@/lib/chat/use-chat';
+import ReactECharts from 'echarts-for-react';
 
 type MessageItemProps = {
   message: ChatMessage;
@@ -52,7 +53,15 @@ export function MessageItem({ message, hasData, onClick, inlineChart }: MessageI
             </>
           )}
         </div>
-        {inlineChart && message.chartHtml && (
+        {inlineChart && message.chartOption ? (
+          <div className="mt-2 mx-3 mb-3 border rounded overflow-hidden">
+            <ReactECharts
+              option={message.chartOption}
+              style={{ height: '280px', width: '100%' }}
+              opts={{ renderer: 'canvas' }}
+            />
+          </div>
+        ) : inlineChart && message.chartHtml ? (
           <div className="mt-2 mx-3 mb-3 border rounded overflow-hidden">
             <iframe
               srcDoc={message.chartHtml}
@@ -61,7 +70,7 @@ export function MessageItem({ message, hasData, onClick, inlineChart }: MessageI
               title="chart"
             />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

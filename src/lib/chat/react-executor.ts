@@ -13,12 +13,13 @@ export async function executeReActLoop(
   ctx: ToolContext,
   previousQueryContext?: { sql: string; query: string } | null,
   // 嵌入模式下预填充数据，数据已通过 postMessage 直接提供，跳过 queryTool
-  embeddedData?: { records: Record<string, unknown>[]; columns: string[] },
+  embeddedData?: { records: Record<string, unknown>[]; columns: string[]; labels: string[] },
 ): Promise<ReActResult> {
   // 嵌入模式：预填充 ctx.data 和 ctx.columns
   if (embeddedData) {
     ctx.data = embeddedData.records;
     ctx.columns = embeddedData.columns;
+    ctx.labels = embeddedData.labels;
     ctx.dataSource = 'embedded';
   }
 

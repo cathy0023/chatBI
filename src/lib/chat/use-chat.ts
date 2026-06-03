@@ -19,6 +19,7 @@ export type ChatMessage = {
   records?: Record<string, unknown>[];
   columns?: string[];
   chartHtml?: string;
+  chartOption?: Record<string, unknown>;
 };
 
 const PHASE_LABELS: Record<LoadingPhase, string> = {
@@ -159,7 +160,9 @@ export function useChat() {
                 case 'chart':
                   setMessages(prev =>
                     prev.map(m =>
-                      m.id === assistantId ? { ...m, chartHtml: parsed.html } : m,
+                      m.id === assistantId
+                        ? { ...m, chartHtml: parsed.html, chartOption: parsed.option }
+                        : m,
                     ),
                   );
                   break;

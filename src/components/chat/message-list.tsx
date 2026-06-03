@@ -11,9 +11,10 @@ type MessageListProps = {
   selectedMessageId?: string | null;
   onSelectMessage?: (message: ChatMessage) => void;
   inlineChart?: boolean;
+  embed?: boolean;
 };
 
-export function MessageList({ messages, isLoading, selectedMessageId, onSelectMessage, inlineChart }: MessageListProps) {
+export function MessageList({ messages, isLoading, selectedMessageId, onSelectMessage, inlineChart, embed }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,8 +25,8 @@ export function MessageList({ messages, isLoading, selectedMessageId, onSelectMe
     <ScrollArea className="flex-1 min-h-0 px-4">
       <div className="flex flex-col gap-2 py-2">
         {messages.length === 0 && !isLoading && (
-          <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm py-4">
-            <p>开始对话，提出您的数据分析问题</p>
+          <div className={`text-muted-foreground text-sm ${embed ? 'text-center py-3 text-xs' : 'flex flex-1 items-center justify-center py-4'}`}>
+            <p>{embed ? '输入问题开始分析' : '开始对话，提出您的数据分析问题'}</p>
           </div>
         )}
         {messages.map(msg => {

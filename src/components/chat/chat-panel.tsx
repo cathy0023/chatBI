@@ -16,31 +16,36 @@ type ChatPanelProps = {
   selectedMessageId?: string | null;
   onSelectMessage?: (msg: ChatMessage) => void;
   inlineChart?: boolean;
+  embed?: boolean;
 };
 
-export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages, selectedMessageId, onSelectMessage, inlineChart }: ChatPanelProps) {
+export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessages, selectedMessageId, onSelectMessage, inlineChart, embed }: ChatPanelProps) {
   return (
     <div className="flex h-full flex-col min-h-0">
-      {/* Chat Panel Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold">对话</h2>
-          {messages.length > 0 && (
-            <Badge variant="secondary" className="text-xs">
-              {messages.length} 条消息
-            </Badge>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={clearMessages}
-          disabled={messages.length === 0}
-        >
-          清空
-        </Button>
-      </div>
-      <Separator />
+      {/* Chat Panel Header — hidden in embed mode (drawer already has title) */}
+      {!embed && (
+        <>
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">对话</h2>
+              {messages.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {messages.length} 条消息
+                </Badge>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearMessages}
+              disabled={messages.length === 0}
+            >
+              清空
+            </Button>
+          </div>
+          <Separator />
+        </>
+      )}
 
       {/* Error display */}
       {error && (
@@ -56,6 +61,7 @@ export function ChatPanel({ messages, isLoading, error, sendMessage, clearMessag
         selectedMessageId={selectedMessageId}
         onSelectMessage={onSelectMessage}
         inlineChart={inlineChart}
+        embed={embed}
       />
 
       {/* Input */}
