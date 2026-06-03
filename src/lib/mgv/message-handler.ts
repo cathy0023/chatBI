@@ -51,9 +51,9 @@ export function setupMGVMessageHandler(handlers: MGVHandlers): () => void {
   window.addEventListener('message', handler);
 
   // Stop inline buffer and replay captured messages
-  const w = window as unknown as { __CHATBI_BUFFERING?: boolean; __CHATBI_BUFFER?: MessageEvent[] };
-  w.__CHATBI_BUFFERING = false;
-  const buffer = w.__CHATBI_BUFFER;
+  const w = window as unknown as { __CHATBI_BUFFERING__?: boolean; __CHATBI_BUFFER__?: MessageEvent[] };
+  w.__CHATBI_BUFFERING__ = false;
+  const buffer = w.__CHATBI_BUFFER__;
   log('buffer length=' + (buffer?.length ?? 'undefined'));
   if (buffer && buffer.length > 0) {
     for (const e of buffer) {
