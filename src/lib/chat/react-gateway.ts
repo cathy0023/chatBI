@@ -6,7 +6,38 @@ import type { SSESender } from './sse-helper';
 
 const GREETING_PATTERN = /^(你好|hi|hello|嗨|hey|哈喽|早上好|下午好|晚上好|您好)([!.?？。！]*\s*)?$/i;
 
-const GREETING_RESPONSE = '你好！我是 ChatBI 销售数据分析助手。你可以问我关于销售业绩的问题，比如：\n\n- **9月成交top5的销售**\n- **各部门成交汇总**\n- **每月成交趋势**\n\n试试看吧！';
+// 非 metric 的维度列，用于过滤
+const DIMENSION_COLUMNS = new Set([
+  'name', '姓名', 'tree_name', '父部门', '主部门',
+  'department', 'month', '月份', 'id', 'date', '日期',
+]);
+
+/**
+ * 根据实际数据列动态生成问候语。
+ * 嵌入模式：基于 MGV 传来的 columns 生成相关问题。
+ * 独立模式：使用 DB 表 schema 信息。
+ */
+function generateGreeting(
+  embeddedData?: { records: Record<string, unknown>[]; columns: string[]; labels: string[] },
+): string {
+  if (embeddedData && embeddedData.columns.length > 0) {
+    // 从 columns 中提取 metric 列（排除维度列）
+    const metrics = embeddedData.columns.filter(c => !DIMENSION_COLUMNS.has(c));
+    if (metrics.length > 0) {
+      const examples = metrics.slice(0, 3).map((m, i) => {
+        const templates = [
+          `${m}排名 Top 5`,
+          `各维度${m}对比`,
+          `${m}的分布情况`,
+        ];
+        return templates[i % templates.length];
+      });
+      return `你好！我是 ChatBI 数据分析助手。当前数据包含 **${metrics.length}** 个指标（${metrics.slice(0, 4).join('、')}${metrics.length > 4 ? '等' : ''}），你可以问我：\n\n${examples.map(e => `- **${e}**`).join('\n')}\n\n试试看吧！`;
+    }
+  }
+  // 兜底：独立模式或无列信息
+  return '你好！我是 ChatBI 数据分析助手。你可以用自然语言提问，我会帮你查询和分析数据。\n\n试试看吧！';
+}
 
 /**
  * Extract query context from the most recent assistant message that has SQL data.
@@ -52,8 +83,9 @@ export class ReActGateway {
     const isEmbedded = !!embeddedData;
 
     if (GREETING_PATTERN.test(trimmed)) {
-      send('text', { text: GREETING_RESPONSE });
-      persistMessage(ctx.sessionId, 'assistant', GREETING_RESPONSE);
+      const greeting = generateGreeting(embeddedData);
+      send('text', { text: greeting });
+      persistMessage(ctx.sessionId, 'assistant', greeting);
       send('done', {});
       return;
     }
