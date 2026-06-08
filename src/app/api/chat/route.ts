@@ -3,6 +3,7 @@ import { ensureSession, persistMessage } from '@/lib/chat/session';
 import { createSSEStream } from '@/lib/chat/sse-helper';
 import { ReActGateway } from '@/lib/chat/react-gateway';
 import { DEFAULT_TENANT } from '@/lib/chat/types';
+import { proxyToPython } from '@/lib/chat/proxy-to-python';
 
 interface ChatBody {
   message: string;
@@ -15,6 +16,12 @@ interface ChatBody {
 }
 
 export async function POST(request: NextRequest) {
+  // Route to Python Pydantic AI agent if requested
+  const url = new URL(request.url);
+  if (url.searchParams.get('agent') === 'pydantic') {
+    return proxyToPython(request);
+  }
+
   try {
     const body: ChatBody = await request.json();
     const { message, sessionId, embedded, records, columns, labels } = body;
