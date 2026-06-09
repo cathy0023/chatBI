@@ -26,8 +26,18 @@ export async function POST(request: NextRequest) {
     const body: ChatBody = await request.json();
     const { message, sessionId, embedded, records, columns, labels } = body;
 
-    if (!message || typeof message !== 'string') {
+    if (typeof message !== 'string') {
       return Response.json({ error: 'message is required' }, { status: 400 });
+    }
+    const trimmed = message.trim();
+    if (!trimmed) {
+      // Empty input — return a helpful SSE stream with a single text+done instead of 400
+      return createSSEStream(async (send) => {
+        const sid = ensureSession(sessionId);
+        send('session', { sessionId: sid });
+        send('text', { text: '请输入您的问题，比如「各部门成交数」「各月成交趋势」。' });
+        send('done', {});
+      });
     }
 
     // embed 和独立模式统一走 ensureSession

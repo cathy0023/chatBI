@@ -22,7 +22,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!value.trim() || disabled) return;
+      if (disabled) return;
       onSend(value.trim());
       setValue('');
     }

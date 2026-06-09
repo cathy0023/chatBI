@@ -66,8 +66,13 @@ export function useChat() {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Read agent param from page URL so API routing works (?agent=pydantic)
+  const agentSuffix = typeof window !== 'undefined'
+    ? (() => { const p = new URLSearchParams(window.location.search); const a = p.get('agent'); return a ? `?agent=${a}` : ''; })()
+    : '';
+
   const sendMessage = useCallback(async (content: string) => {
-    if (!content.trim() || isLoading) return;
+    if (isLoading) return;
 
     setError(null);
     const userMsg: ChatMessage = {
@@ -88,7 +93,7 @@ export function useChat() {
     abortRef.current = abortController;
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch(`/api/chat${agentSuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: content, sessionId }),
@@ -107,7 +112,17 @@ export function useChat() {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // Stream ended — ensure phase reaches 'done' so UI doesn't hang
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantId && m.phase !== 'done' && m.phase !== 'error'
+                ? { ...m, phase: 'done' as LoadingPhase }
+                : m,
+            ),
+          );
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
