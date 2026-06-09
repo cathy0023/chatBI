@@ -1,0 +1,12 @@
+[project]
+name = "chatbi-agent"
+version = "0.1.0"
+description = "ChatBI Pydantic AI Agent"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic-ai>=0.0.30",
+    "openai>=1.50.0",
+    "python-dotenv>=1.0.0",
+]
