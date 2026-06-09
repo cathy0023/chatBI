@@ -58,7 +58,12 @@ async def query_tool(ctx: RunContext[AgentDeps], question: str) -> str:
             "records": records,
             "sql": sql,
         })
-        return f"查询成功，返回 {len(records)} 条记录。列: {columns}"
+
+        # Format data as table for LLM — this is what TS agent does by returning { records, columns }
+        # Without this, the LLM hallucinates data because it can't see the actual values
+        import json
+        data_payload = json.dumps(records[:30], ensure_ascii=False)  # cap at 30 rows
+        return f"查询成功，返回 {len(records)} 条记录。列: {columns}\n数据:\n{data_payload}"
     except Exception as e:
         return f"查询失败: {e}"
 
