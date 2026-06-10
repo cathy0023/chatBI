@@ -21,5 +21,61 @@ class Database:
         cursor = self.conn.execute("SELECT DISTINCT name FROM sales_performance")
         return [row[0] for row in cursor.fetchall()]
 
+    # ── Session CRUD ───────────────────────────────────────────────
+
+    def ensure_session(self, session_id: str) -> None:
+        """Create session if not exists."""
+        row = self.conn.execute(
+            "SELECT id FROM chat_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not row:
+            self.conn.execute(
+                "INSERT INTO chat_sessions (id, title) VALUES (?, NULL)",
+                (session_id,),
+            )
+            self.conn.commit()
+
+    def update_session_title(self, session_id: str, title: str) -> None:
+        """Update session title (skip corrupted titles)."""
+        if '\uFFFD' in title:
+            return
+        self.conn.execute(
+            "UPDATE chat_sessions SET title = ? WHERE id = ?",
+            (title, session_id),
+        )
+        self.conn.commit()
+
+    # ── Message CRUD ──────────────────────────────────────────────
+
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        ui_schema: str | None = None,
+    ) -> str:
+        """Insert a chat message, return its id."""
+        import uuid
+        msg_id = str(uuid.uuid4())
+        self.conn.execute(
+            "INSERT INTO chat_messages (id, session_id, role, content, ui_schema) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (msg_id, session_id, role, content, ui_schema),
+        )
+        self.conn.commit()
+        return msg_id
+
+    def get_messages(self, session_id: str) -> list[dict]:
+        """Return all messages for a session, oldest first."""
+        cursor = self.conn.execute(
+            "SELECT role, content, ui_schema FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        )
+        return [
+            {"role": row[0], "content": row[1], "ui_schema": row[2]}
+            for row in cursor.fetchall()
+        ]
+
     def close(self):
         self.conn.close()
