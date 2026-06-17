@@ -16,6 +16,9 @@ class AgentDeps:
     # Chart state
     chart_html: str | None = None
     chart_option: dict | None = None
+    # Embedded mode (MGV iframe)
+    embedded: bool = False
+    labels: list = field(default_factory=list)
     # New fields for P0-P2 gap closing
     original_query: str = ""
     previous_query_context: dict | None = None  # {sql, query}

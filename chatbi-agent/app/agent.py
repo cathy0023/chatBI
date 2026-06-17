@@ -5,7 +5,8 @@ Aligned with TS Agent capabilities (P0-P2).
 """
 import json
 import re
-from pydantic_ai import Agent, RunContext
+import sqlite3
+from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -47,9 +48,37 @@ SYSTEM_PROMPT = (
     "- **必须生成最终文字回答**：无论调用了哪些工具，最终必须输出一段文字总结给用户。不能只调用工具而不给出文字回答。\n"
 )
 
+EMBEDDED_SYSTEM_PROMPT = (
+    "你是数据分析助手。\n\n"
+    "MGV AI 已通过 iframe 传递了当前页面的数据（records + columns），数据已直接加载到上下文中。\n"
+    "列有对应的中文标签（如 \"深入沟通占比\"、\"加微数\" 等），工具会自动使用标签来理解和分析数据。\n\n"
+    "你可以使用以下工具：\n\n"
+    "1. **analysisTool**: 分析已提供的数据，生成洞察和总结。\n"
+    "   - 用于：趋势分析、排名对比、异常发现\n"
+    "   - 数据已直接提供，直接调用即可\n\n"
+    "2. **chartTool**: 生成可视化图表（柱状图、折线图、饼图等）。\n"
+    "   - 数据已直接提供，直接调用即可\n\n"
+    "工作流程：\n"
+    "1. 直接调用 analysisTool 生成文字洞察\n"
+    "2. 调用 chartTool 生成图表\n"
+    "3. 综合给出完整回答\n\n"
+    "规则：\n"
+    "- 引用的数字必须与已提供的数据完全一致\n"
+    "- 不要自行计算或推测\n"
+    "- 控制在 300 字以内\n"
+    "- 直接回答用户问题\n"
+    "- **禁止调用 queryTool**（数据已直接提供，无需 NL2SQL 查询）\n"
+    "- **必须生成最终文字回答**\n"
+    "- **必须调用 chartTool 生成图表**\n"
+)
+
 
 def build_system_prompt_with_context(deps: AgentDeps) -> str:
     """Build system prompt with previous query context injected."""
+    # 嵌入模式：使用专用的 embedded prompt
+    if deps.embedded:
+        return EMBEDDED_SYSTEM_PROMPT
+
     prompt = SYSTEM_PROMPT
     if deps.previous_query_context:
         ctx = deps.previous_query_context
@@ -69,6 +98,7 @@ agent = Agent(
     deps_type=AgentDeps,
     output_type=str,
     retries=2,
+    tool_timeout=30.0,  # 单工具 30s 超时
 )
 
 
@@ -82,10 +112,15 @@ async def _system_prompt(ctx: RunContext[AgentDeps]) -> str:
 @agent.tool
 async def query_tool(ctx: RunContext[AgentDeps], question: str) -> str:
     """根据用户问题查询销售数据。question 参数是用户的原始问题文本。"""
+    deps = ctx.deps
+
+    # 嵌入模式：数据已预填，禁止调用 queryTool
+    if deps.embedded:
+        return "当前为嵌入模式，数据已直接提供（不可调用此工具）。请使用 analysisTool 和 chartTool 来分析数据。"
+
     from app.nl2sql import nl2sql_query
     from app.query_helpers import resolve_short_name, suggest_similar_name
 
-    deps = ctx.deps
     await deps.send("step", {"type": "tool_call", "toolName": "queryTool"})
 
     # Short name resolution before NL2SQL
@@ -139,8 +174,15 @@ async def query_tool(ctx: RunContext[AgentDeps], question: str) -> str:
         if suggestion:
             result_text += f"\n\n{suggestion}"
         return result_text
+    except (sqlite3.OperationalError, TimeoutError) as e:
+        # 临时性错误 → 触发框架重试（消耗 retry budget）
+        raise ModelRetry(f"数据库查询超时或连接失败: {e}，请重试一次")
+    except (TypeError, AttributeError, NameError, ValueError) as e:
+        # 编程错误 → 不浪费 retry budget，直接抛出
+        raise
     except Exception as e:
-        return f"查询失败: {e}"
+        # 其他未预期错误也触发重试
+        raise ModelRetry(f"查询执行异常: {e}，请尝试调整查询条件后重试")
 
 
 @agent.tool
@@ -158,18 +200,24 @@ async def analysis_tool(ctx: RunContext[AgentDeps], query: str = "") -> str:
 
     query = query or deps.original_query
 
-    # Generate statistical summary (same logic as TS analysis-tool)
-    rec = recommend_chart(query, deps.data)
-    agg_data = aggregate_for_chart(deps.data, rec["dimension"], rec["metric"])
-    total = sum(agg_data.values())
-    dim_label = COLUMN_LABELS.get(rec["dimension"], rec["dimension"])
-    metric_label = COLUMN_LABELS.get(rec["metric"], rec["metric"])
+    if deps.embedded:
+        # Embedded mode: pass raw data directly for accurate analysis
+        data_payload = json.dumps(deps.data[:30], ensure_ascii=False)
+        cols_text = ", ".join(deps.labels or deps.columns)
+        stats_text = f"数据列: {cols_text}\n数据:\n{data_payload}"
+    else:
+        # Normal mode: aggregate by detected dimension/metric
+        rec = recommend_chart(query, deps.data)
+        agg_data = aggregate_for_chart(deps.data, rec["dimension"], rec["metric"])
+        total = sum(agg_data.values())
+        dim_label = COLUMN_LABELS.get(rec["dimension"], rec["dimension"])
+        metric_label = COLUMN_LABELS.get(rec["metric"], rec["metric"])
 
-    stats_text = (
-        f'按"{dim_label}"分组的"{metric_label}"合计:\n'
-        + "\n".join(f"- {k}: {v}" for k, v in agg_data.items())
-        + f"\n总计: {total}"
-    )
+        stats_text = (
+            f'按"{dim_label}"分组的"{metric_label}"合计:\n'
+            + "\n".join(f"- {k}: {v}" for k, v in agg_data.items())
+            + f"\n总计: {total}"
+        )
 
     # Second LLM call for structured analysis insight (aligned with TS)
     client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
@@ -196,8 +244,12 @@ async def analysis_tool(ctx: RunContext[AgentDeps], query: str = "") -> str:
             temperature=0,
         )
         analysis = response.choices[0].message.content or f"查询到 {len(deps.data)} 条数据。"
-    except Exception:
-        analysis = f"查询到 {len(deps.data)} 条数据。列: {deps.columns}。数据已准备好生成图表。"
+    except Exception as e:
+        row_count = len(deps.data)
+        raise ModelRetry(
+            f"数据分析LLM调用失败: {e}。当前有 {row_count} 条数据，"
+            f"请重试一次。如果持续失败，请直接根据数据给出你的观察和建议。"
+        )
 
     return f"分析结果：{analysis}"
 
@@ -214,7 +266,10 @@ async def chart_tool(ctx: RunContext[AgentDeps], query: str = "") -> str:
         return "请先调用 query_tool 获取数据"
 
     query = query or deps.original_query
-    html, option = generate_chart_html(query, deps.data, deps.columns)
+    try:
+        html, option = generate_chart_html(query, deps.data, deps.columns, deps.labels)
+    except Exception as e:
+        raise ModelRetry(f"图表生成异常: {e}，请重试一次")
     deps.chart_html = html
     deps.chart_option = option
 

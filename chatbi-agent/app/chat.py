@@ -9,6 +9,7 @@ import re
 import uuid
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 from pydantic_ai.messages import UserPromptPart, TextPart
+from pydantic_ai import UsageLimits
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -30,6 +31,10 @@ GREETING_PATTERN = re.compile(
 class ChatRequest(BaseModel):
     message: str
     sessionId: str | None = None
+    embedded: bool = False
+    records: list[dict] | None = None
+    columns: list[str] | None = None
+    labels: list[str] | None = None
 
 
 def _extract_previous_query_context(
@@ -131,24 +136,44 @@ async def chat(req: ChatRequest):
     async def send(event: str, data: dict):
         await queue.put((event, data))
 
+    # DEBUG: log embedded request data for tracing
+    if req.embedded:
+        import sys
+        print(f"[EMBEDDED DEBUG] columns={req.columns}", file=sys.stderr)
+        print(f"[EMBEDDED DEBUG] labels={req.labels}", file=sys.stderr)
+        if req.records:
+            print(f"[EMBEDDED DEBUG] record_count={len(req.records)}", file=sys.stderr)
+            # Print first 2 records to see actual values
+            for i, r in enumerate(req.records[:3]):
+                print(f"[EMBEDDED DEBUG] record[{i}]={json.dumps(r, ensure_ascii=False)}", file=sys.stderr)
+        sys.stderr.flush()
+
     deps = AgentDeps(
         session_id=session_id,
         db=db,
         send=send,
         original_query=user_prompt,
         previous_query_context=previous_query_context,
+        embedded=req.embedded,
+        labels=req.labels or [],
+        # 嵌入模式：预填数据（跳过 queryTool）
+        data=req.records if req.embedded and req.records else [],
+        columns=req.columns if req.embedded and req.columns else [],
     )
 
     async def run_agent():
         try:
-            # 60s timeout aligned with TS Agent's AbortController
             result = await asyncio.wait_for(
                 agent.run(
                     user_prompt,
                     deps=deps,
                     message_history=model_history if model_history else None,
+                    usage_limits=UsageLimits(
+                        request_limit=8,       # 最多 8 次 LLM 请求（含 output retry 余量）
+                        tool_calls_limit=10,   # 最多 10 次成功工具调用
+                    ),
                 ),
-                timeout=60,
+                timeout=100,  # >= tool_timeout=30 x 3(含重试) = 90s + 10s 余量
             )
             text = str(result.output) if result.output else ""
 
