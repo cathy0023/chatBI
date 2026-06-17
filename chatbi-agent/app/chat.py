@@ -7,9 +7,10 @@ import asyncio
 import json
 import re
 import uuid
+from pydantic_ai import UsageLimits, RunContext
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 from pydantic_ai.messages import UserPromptPart, TextPart
-from pydantic_ai import UsageLimits
+from collections.abc import AsyncIterable
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -161,6 +162,33 @@ async def chat(req: ChatRequest):
         columns=req.columns if req.embedded and req.columns else [],
     )
 
+    # ── Event stream handler: 实时流式 LLM 文本 token ─────────────
+    # Pydantic AI 的 event_stream_handler 会在每次 LLM response delta
+    # 和工具调用时被调用，实现真正的 token 级别流式输出。
+    text_buf: list[str] = []  # 累积完整文本用于持久化
+
+    async def _stream_handler(
+        ctx: RunContext[AgentDeps], events: AsyncIterable[object],
+    ) -> None:
+        from pydantic_ai.messages import (
+            PartDeltaEvent, PartStartEvent, FunctionToolCallEvent,
+        )
+        async for event in events:
+            # 文本 token delta → 实时发送给前端
+            if isinstance(event, PartDeltaEvent):
+                delta = event.delta
+                if hasattr(delta, 'content_delta') and delta.content_delta:
+                    text_buf.append(delta.content_delta)
+                    await queue.put(("text_delta", {
+                        "content": delta.content_delta,
+                    }))
+            # 文本部分开始
+            elif isinstance(event, PartStartEvent):
+                pass  # 可用于标记新段落的开始
+            # 工具调用 → 发送 step 事件（与工具内部的 deps.send 互补）
+            elif isinstance(event, FunctionToolCallEvent):
+                pass  # 工具内部已通过 deps.send 发送 step 事件
+
     async def run_agent():
         try:
             result = await asyncio.wait_for(
@@ -172,16 +200,20 @@ async def chat(req: ChatRequest):
                         request_limit=8,       # 最多 8 次 LLM 请求（含 output retry 余量）
                         tool_calls_limit=10,   # 最多 10 次成功工具调用
                     ),
+                    event_stream_handler=_stream_handler,
                 ),
                 timeout=100,  # >= tool_timeout=30 x 3(含重试) = 90s + 10s 余量
             )
             text = str(result.output) if result.output else ""
 
             # SSE event order: text → data → chart → done (aligned with TS)
+            # text_delta 已在 _stream_handler 中实时发送，这里发送完整文本
+            # 使用 result.output 作为最终文本（LLM 可能在 output retry 中重新生成）
             if not text and deps.data:
                 text = "已完成数据查询，请查看右侧数据结果。"
 
             if text:
+                # 发送完整文本 event（前端用此持久化，text_delta 用于渐进渲染）
                 await queue.put(("text", {"text": text}))
 
             if deps.data:

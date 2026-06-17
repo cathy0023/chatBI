@@ -7,6 +7,7 @@ import json
 import re
 import sqlite3
 from pydantic_ai import Agent, RunContext, ModelRetry
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -109,14 +110,19 @@ async def _system_prompt(ctx: RunContext[AgentDeps]) -> str:
     return build_system_prompt_with_context(ctx.deps)
 
 
-@agent.tool
+def _omit_query_tool_in_embedded(
+    ctx: RunContext[AgentDeps], tool_def: ToolDefinition,
+) -> ToolDefinition | None:
+    """嵌入模式下从工具列表中移除 queryTool，避免 LLM 浪费回合调用它."""
+    if ctx.deps.embedded:
+        return None
+    return tool_def
+
+
+@agent.tool(prepare=_omit_query_tool_in_embedded)
 async def query_tool(ctx: RunContext[AgentDeps], question: str) -> str:
     """根据用户问题查询销售数据。question 参数是用户的原始问题文本。"""
     deps = ctx.deps
-
-    # 嵌入模式：数据已预填，禁止调用 queryTool
-    if deps.embedded:
-        return "当前为嵌入模式，数据已直接提供（不可调用此工具）。请使用 analysisTool 和 chartTool 来分析数据。"
 
     from app.nl2sql import nl2sql_query
     from app.query_helpers import resolve_short_name, suggest_similar_name
