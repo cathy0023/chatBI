@@ -2,17 +2,22 @@
 """
 Pydantic AI Agent definition + tool registration.
 Aligned with TS Agent capabilities (P0-P2).
+
+Tool implementations live in app/tools/*. agent.py only keeps:
+  - Model setup
+  - System prompts (normal + embedded)
+  - Agent() construction with reliability params
+  - @agent.tool decoration (delegates to tool modules)
 """
-import json
-import re
-import sqlite3
-from pydantic_ai import Agent, RunContext, ModelRetry
-from pydantic_ai.tools import ToolDefinition
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.deps import AgentDeps
 from app.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
+from app.tools.query_tool import query_tool, prepare_query_tool
+from app.tools.analysis_tool import analysis_tool
+from app.tools.chart_tool import chart_tool
 
 # ── Model Setup ─────────────────────────────────────────────────
 
@@ -103,182 +108,15 @@ agent = Agent(
 )
 
 
-# ── Tools ────────────────────────────────────────────────────────
+# ── Dynamic system prompt ────────────────────────────────────────
 
 @agent.system_prompt
 async def _system_prompt(ctx: RunContext[AgentDeps]) -> str:
     return build_system_prompt_with_context(ctx.deps)
 
 
-def _omit_query_tool_in_embedded(
-    ctx: RunContext[AgentDeps], tool_def: ToolDefinition,
-) -> ToolDefinition | None:
-    """嵌入模式下从工具列表中移除 queryTool，避免 LLM 浪费回合调用它."""
-    if ctx.deps.embedded:
-        return None
-    return tool_def
+# ── Tool registration (impls imported from app/tools/) ──────────
 
-
-@agent.tool(prepare=_omit_query_tool_in_embedded)
-async def query_tool(ctx: RunContext[AgentDeps], question: str) -> str:
-    """根据用户问题查询销售数据。question 参数是用户的原始问题文本。"""
-    deps = ctx.deps
-
-    from app.nl2sql import nl2sql_query
-    from app.query_helpers import resolve_short_name, suggest_similar_name
-
-    await deps.send("step", {"type": "tool_call", "toolName": "queryTool"})
-
-    # Short name resolution before NL2SQL
-    resolved_question = resolve_short_name(deps.db, question)
-
-    try:
-        sql, columns, records = await nl2sql_query(resolved_question, deps.db)
-
-        # Multi-query merge: when LLM calls queryTool multiple times
-        # (e.g., "person vs overall" comparison), append & annotate
-        if deps.data and deps.columns:
-            # Detect person name from SQL WHERE clause
-            name_match = re.search(r"name\s*=\s*'([^']+)'", sql, re.IGNORECASE)
-            person_name = name_match.group(1) if name_match else "整体"
-            # Animate only records without an existing name field
-            annotated = [
-                {**r, "name": person_name}
-                if r.get("name") is None or str(r.get("name", "")).strip() == ""
-                else {**r}
-                for r in records
-            ]
-            deps.data = [*deps.data, *annotated]
-            new_cols = [c for c in columns if c not in deps.columns]
-            if "name" not in deps.columns:
-                deps.columns = [*deps.columns, "name", *new_cols]
-            else:
-                deps.columns = [*deps.columns, *new_cols]
-            deps.sql = sql
-        else:
-            # First query
-            name_match = re.search(r"name\s*=\s*'([^']+)'", sql, re.IGNORECASE)
-            person_name = name_match.group(1) if name_match else "整体"
-            annotated = [
-                {**r, "name": person_name}
-                if r.get("name") is None or str(r.get("name", "")).strip() == ""
-                else {**r}
-                for r in records
-            ]
-            deps.data = annotated
-            cols = columns if "name" in columns else ["name", *columns]
-            deps.columns = cols
-            deps.sql = sql
-
-        # Fuzzy name suggestion when no results
-        suggestion = None
-        if len(records) == 0:
-            suggestion = suggest_similar_name(deps.db, sql, resolved_question)
-
-        data_payload = json.dumps(records[:30], ensure_ascii=False)
-        result_text = f"查询成功，返回 {len(records)} 条记录。列: {columns}\n数据:\n{data_payload}"
-        if suggestion:
-            result_text += f"\n\n{suggestion}"
-        return result_text
-    except (sqlite3.OperationalError, TimeoutError) as e:
-        # 临时性错误 → 触发框架重试（消耗 retry budget）
-        raise ModelRetry(f"数据库查询超时或连接失败: {e}，请重试一次")
-    except (TypeError, AttributeError, NameError, ValueError) as e:
-        # 编程错误 → 不浪费 retry budget，直接抛出
-        raise
-    except Exception as e:
-        # 其他未预期错误也触发重试
-        raise ModelRetry(f"查询执行异常: {e}，请尝试调整查询条件后重试")
-
-
-@agent.tool
-async def analysis_tool(ctx: RunContext[AgentDeps], query: str = "") -> str:
-    """分析已查询的数据，生成洞察和总结。必须在 query_tool 之后调用。query 参数是用户原始问题。"""
-    from app.charts import recommend_chart, aggregate_for_chart, COLUMN_LABELS
-    from openai import AsyncOpenAI
-    from app.config import OPENAI_API_KEY, OPENAI_BASE_URL, LLM_MODEL
-
-    deps = ctx.deps
-    await deps.send("step", {"type": "tool_call", "toolName": "analysisTool"})
-
-    if not deps.data:
-        return "请先调用 query_tool 获取数据"
-
-    query = query or deps.original_query
-
-    if deps.embedded:
-        # Embedded mode: pass raw data directly for accurate analysis
-        data_payload = json.dumps(deps.data[:30], ensure_ascii=False)
-        cols_text = ", ".join(deps.labels or deps.columns)
-        stats_text = f"数据列: {cols_text}\n数据:\n{data_payload}"
-    else:
-        # Normal mode: aggregate by detected dimension/metric
-        rec = recommend_chart(query, deps.data)
-        agg_data = aggregate_for_chart(deps.data, rec["dimension"], rec["metric"])
-        total = sum(agg_data.values())
-        dim_label = COLUMN_LABELS.get(rec["dimension"], rec["dimension"])
-        metric_label = COLUMN_LABELS.get(rec["metric"], rec["metric"])
-
-        stats_text = (
-            f'按"{dim_label}"分组的"{metric_label}"合计:\n'
-            + "\n".join(f"- {k}: {v}" for k, v in agg_data.items())
-            + f"\n总计: {total}"
-        )
-
-    # Second LLM call for structured analysis insight (aligned with TS)
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-    try:
-        response = await client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是资深销售数据分析顾问。根据统计数据提供有洞察力的分析。",
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"用户问题: {query}\n\n【统计数据】\n{stats_text}\n\n规则:\n"
-                        "1. 提供总结、见解和洞察\n"
-                        "2. 指出关键发现：谁表现突出、谁需要关注\n"
-                        "3. 引用的数字必须与统计完全一致\n"
-                        "4. 控制在150字以内"
-                    ),
-                },
-            ],
-            max_tokens=512,
-            temperature=0,
-        )
-        analysis = response.choices[0].message.content or f"查询到 {len(deps.data)} 条数据。"
-    except Exception as e:
-        row_count = len(deps.data)
-        raise ModelRetry(
-            f"数据分析LLM调用失败: {e}。当前有 {row_count} 条数据，"
-            f"请重试一次。如果持续失败，请直接根据数据给出你的观察和建议。"
-        )
-
-    return f"分析结果：{analysis}"
-
-
-@agent.tool
-async def chart_tool(ctx: RunContext[AgentDeps], query: str = "") -> str:
-    """根据查询结果生成 ECharts 图表。query 参数是用户的原始问题文本。"""
-    from app.charts import generate_chart_html
-
-    deps = ctx.deps
-    await deps.send("step", {"type": "tool_call", "toolName": "chartTool"})
-
-    if not deps.data:
-        return "请先调用 query_tool 获取数据"
-
-    query = query or deps.original_query
-    try:
-        html, option = generate_chart_html(query, deps.data, deps.columns, deps.labels)
-    except Exception as e:
-        raise ModelRetry(f"图表生成异常: {e}，请重试一次")
-    deps.chart_html = html
-    deps.chart_option = option
-
-    if html:
-        return "图表已生成"
-    return "图表生成失败（无数据）"
+agent.tool(prepare=prepare_query_tool)(query_tool)
+agent.tool(analysis_tool)
+agent.tool(chart_tool)
